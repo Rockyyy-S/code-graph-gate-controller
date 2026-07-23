@@ -149,6 +149,7 @@ jobs:
 
       - name: Install frozen dependencies without candidate lifecycle
         env:
+          HEAD_OID: ${{ inputs.head_oid }}
           TRUSTED_PNPM_BIN: /opt/trusted-pnpm/bin
         shell: bash
         run: |
@@ -157,8 +158,20 @@ jobs:
             sudo rm -rf -- /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
           }
           trap cleanup_install_identity EXIT
-          candidate_root="$(realpath -- candidate)"
+          workspace_root="$(realpath -- "$GITHUB_WORKSPACE")"
+          source_candidate="$(realpath -- candidate)"
+          candidate_parent=/tmp/gatecandidate-root
+          candidate_root="$candidate_parent/worktree"
+          [[ "$source_candidate" == "$workspace_root/candidate" ]]
+          [[ -d "$source_candidate/.git" && ! -L "$source_candidate/.git" ]]
+          [[ "$(git -C "$source_candidate" rev-parse HEAD)" == "$HEAD_OID" ]]
+          [[ "$(realpath -m -- "$candidate_parent")" == "$candidate_parent" && ! -e "$candidate_parent" ]]
+          # 父目录保持 root-owned，阻止安装阶段替换固定候选路径。
+          sudo install -d -o 0 -g 20001 -m 0750 "$candidate_parent"
+          sudo install -d -o 20001 -g 20001 -m 0700 "$candidate_root"
+          sudo cp -a -- "$source_candidate/." "$candidate_root/"
           sudo chown -R 20001:20001 "$candidate_root"
+          [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
           cd -- "$candidate_root"
           sudo -u gatecandidate env -i \
             CI=true \
@@ -172,14 +185,21 @@ jobs:
             pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
           cleanup_install_identity
           trap - EXIT
+          # 从候选 UID 无法访问的原 checkout 恢复 Git 元数据，再拒绝任何 tracked 漂移。
+          sudo rm -rf -- "$candidate_root/.git"
+          sudo cp -a -- "$source_candidate/.git" "$candidate_root/.git"
           sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
-          sudo chown -R "$(id -u):$(id -g)" "$candidate_root"
-          sudo chmod -R go-w "$candidate_root"
+          sudo chown -R "$(id -u):20001" "$candidate_root"
+          sudo chmod -R u+rwX,g+rX,o-rwx "$candidate_root"
+          [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
+          sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
 
       - name: Grant candidate writes only to generated output directories
         shell: bash
         run: |
-          candidate_root="$(realpath -- candidate)"
+          candidate_root=/tmp/gatecandidate-root/worktree
+          [[ -d "$candidate_root" && ! -L "$candidate_root" ]]
+          [[ "$(realpath -- "$candidate_root")" == "$candidate_root" ]]
           outputs=(
             apps/cli/dist
             apps/extension/dist
@@ -219,7 +239,7 @@ jobs:
           sudo env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
             --artifact-directory artifacts \
             --base-oid "$BASE_OID" \
-            --candidate-root candidate \
+            --candidate-root /tmp/gatecandidate-root/worktree \
             --controller-repository Rockyyy-S/code-graph-gate-controller \
             --gate-gid 20001 \
             --gate-home /tmp/gatecandidate-home \
@@ -240,6 +260,14 @@ jobs:
           name: gate-evidence-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
           path: artifacts/
           retention-days: 1
+
+      - name: Remove isolated candidate worktree
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          sudo pkill -KILL -u 20001 || true
+          sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home /tmp/gatecandidate-tmp \
+            /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
 
   gate-evidence:
     name: gate-evidence

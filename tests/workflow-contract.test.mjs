@@ -78,15 +78,32 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
     workflow,
     /cd -- "\$candidate_root"[\s\S]*sudo -u gatecandidate env -i[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
   );
+  assert.match(workflow, /workspace_root="\$\(realpath -- "\$GITHUB_WORKSPACE"\)"/u);
+  assert.match(workflow, /source_candidate="\$\(realpath -- candidate\)"/u);
+  assert.match(workflow, /candidate_parent=\/tmp\/gatecandidate-root/u);
+  assert.match(workflow, /candidate_root="\$candidate_parent\/worktree"/u);
+  assert.match(workflow, /install -d -o 0 -g 20001 -m 0750 "\$candidate_parent"/u);
+  assert.match(workflow, /git -C "\$source_candidate" rev-parse HEAD/u);
+  assert.match(workflow, /sudo cp -a -- "\$source_candidate\/\." "\$candidate_root\/"/u);
+  assert.match(workflow, /sudo git -c safe\.directory="\$candidate_root" -C "\$candidate_root" rev-parse HEAD/u);
   assert.match(workflow, /sudo pkill -KILL -u 20001 \|\| true/u);
   assert.match(workflow, /gatecandidate-install-home/u);
   assert.match(workflow, /install -d -o 0 -g 0 -m 0711 \/tmp\/gatecandidate-home/u);
-  assert.match(workflow, /candidate_root="\$\(realpath -- candidate\)"/u);
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.doesNotMatch(workflow, /sudo -u gatecandidate --chdir=|sudo -D\b/u);
+  assert.doesNotMatch(workflow, /setfacl|chmod[^\n]*GITHUB_WORKSPACE/u);
   assert.match(workflow, /sudo env -i HOME=/u);
-  assert.match(workflow, /sudo chmod -R go-w "\$candidate_root"/u);
+  assert.match(workflow, /sudo chown -R "\$\(id -u\):20001" "\$candidate_root"/u);
+  assert.match(workflow, /sudo chmod -R u\+rwX,g\+rX,o-rwx "\$candidate_root"/u);
+  assert.match(workflow, /sudo rm -rf -- "\$candidate_root\/\.git"/u);
+  assert.match(workflow, /sudo cp -a -- "\$source_candidate\/\.git" "\$candidate_root\/\.git"/u);
+  assert.match(
+    workflow,
+    /git -c safe\.directory="\$candidate_root" -C "\$candidate_root" diff --quiet --no-ext-diff HEAD --/u,
+  );
+  assert.match(workflow, /--candidate-root \/tmp\/gatecandidate-root\/worktree/u);
+  assert.match(workflow, /sudo rm -rf -- \/tmp\/gatecandidate-root/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);
   assert.match(workflow, /--gate-uid 20001/u);
   assert.match(workflow, /--gate-gid 20001/u);
