@@ -1,0 +1,44 @@
+name: architecture-gate-controller
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  controller:
+    name: controller
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Mint Controller App installation token
+        id: controller-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.CONTROLLER_APP_ID }}
+          owner: Rockyyy-S
+          private-key: ${{ secrets.CONTROLLER_PRIVATE_KEY }}
+          repositories: code-graph
+
+      - name: Aggregate provider-authenticated evidence
+        env:
+          CONTROLLER_APP_ID: ${{ secrets.CONTROLLER_APP_ID }}
+          CONTROLLER_REPOSITORY_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.controller-token.outputs.token }}
+          TARGET_REPOSITORY: Rockyyy-S/code-graph
+          TARGET_REPOSITORY_ID: "1303415307"
+        run: node bin/run-controller.mjs
