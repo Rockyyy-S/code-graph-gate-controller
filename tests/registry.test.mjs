@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
-import { parseEvidenceProducerId, validateRegistry } from "../lib/registry.mjs";
+import {
+  parseEvidenceProducerId,
+  validateRegistry,
+  validateTrustedRegistryRecord,
+} from "../lib/registry.mjs";
 
 const workflowSha = "1".repeat(40);
 
@@ -50,4 +55,24 @@ test("registry 对摘要漂移、未知字段和非法 trigger fail closed", () 
 
   const invalidTrigger = createRegistry({ triggerPaths: [] });
   assert.throws(() => validateRegistry(invalidTrigger), /triggerPaths/u);
+});
+
+test("可信 registry sequence=2 绑定批准证据、候选提交和新 producer", async () => {
+  const approval = JSON.parse(
+    await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
+  );
+  const record = JSON.parse(
+    await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
+  );
+
+  validateTrustedRegistryRecord(record);
+  assert.equal(record.sequence, 2);
+  assert.equal(record.sourceCommit, "d54be3b34eddc55c3e7f65dafe8682718290904a");
+  assert.equal(
+    record.gateRegistryDigest,
+    "d1b9e3c2529514dfbe4a058ed4d17f86d4e24e05951a4391ddf09161eb113378",
+  );
+  assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
+  assert.equal(approval.sequence, record.sequence);
+  assert.equal(approval.producerWorkflowSha, "3a0b53163e91bf14d4a3d1e911292b267e1e968a");
 });

@@ -1,10 +1,13 @@
 {
   "schemaVersion": 1,
-  "approvalKind": "initial-gate-registry-bootstrap",
+  "approvalKind": "gate-registry-producer-migration",
   "approvedBy": "Rockyyy-S",
-  "approvedAt": "2026-07-23T12:16:19+08:00",
+  "approvedAt": "2026-07-23T12:28:17+08:00",
   "providerRepositoryId": "1303415307",
-  "sourceCommit": "500120460fec6ed5471be091c5863b45e0d06503",
-  "gateRegistryDigest": "dba16618f2520c81be1a208d054eabad5eba50fc10a72d65b03cdd486a0c43f7",
-  "producerWorkflowSha": "616633c1e594174e4964672f1d04e94718995940"
+  "sequence": 2,
+  "sourceCommit": "d54be3b34eddc55c3e7f65dafe8682718290904a",
+  "previousGateRegistryDigest": "dba16618f2520c81be1a208d054eabad5eba50fc10a72d65b03cdd486a0c43f7",
+  "gateRegistryDigest": "d1b9e3c2529514dfbe4a058ed4d17f86d4e24e05951a4391ddf09161eb113378",
+  "previousProducerWorkflowSha": "616633c1e594174e4964672f1d04e94718995940",
+  "producerWorkflowSha": "3a0b53163e91bf14d4a3d1e911292b267e1e968a"
 }
