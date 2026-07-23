@@ -48,9 +48,13 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.equal(typeof evidenceRun, "string");
   assert.doesNotMatch(evidenceRun, /\$\{\{ inputs\./u);
   assert.match(workflow, /dest: \$\{\{ github\.workspace \}\}\/trusted-pnpm/u);
-  assert.match(workflow, /TRUSTED_PNPM_BIN: \$\{\{ steps\.pnpm-install\.outputs\.bin_dest \}\}/u);
-  assert.match(workflow, /chmod -R u\+rwX,go\+rX,go-w "\$GITHUB_WORKSPACE\/trusted-pnpm"/u);
-  assert.match(workflow, /sudo -u gatecandidate test -x "\$TRUSTED_PNPM_BIN\/pnpm"/u);
+  assert.match(workflow, /standalone: true/u);
+  assert.match(workflow, /ACTION_PNPM_BIN: \$\{\{ steps\.pnpm-install\.outputs\.bin_dest \}\}/u);
+  assert.match(workflow, /\[\[ -f "\$source_pnpm" && -x "\$source_pnpm" \]\]/u);
+  assert.match(workflow, /install -o 0 -g 0 -m 0755 "\$source_pnpm" \/opt\/trusted-pnpm\/bin\/pnpm/u);
+  assert.match(workflow, /sudo -u gatecandidate env -i PATH=\/opt\/trusted-pnpm\/bin/u);
+  assert.match(workflow, /\[\[ "\$pnpm_version" == "11\.12\.0" \]\]/u);
+  assert.match(workflow, /TRUSTED_PNPM_BIN: \/opt\/trusted-pnpm\/bin/u);
   assert.match(workflow, /PATH="\$TRUSTED_PNPM_BIN:\$PATH"/u);
   assert.match(
     workflow,

@@ -83,6 +83,7 @@ jobs:
         with:
           dest: ${{ github.workspace }}/trusted-pnpm
           run_install: false
+          standalone: true
           version: 11.12.0
 
       - name: Install Node.js
@@ -100,22 +101,33 @@ jobs:
 
       - name: Harden trusted pnpm for isolated execution
         env:
-          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
+          ACTION_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
         shell: bash
         run: |
-          case "$TRUSTED_PNPM_BIN" in
+          case "$ACTION_PNPM_BIN" in
             "$GITHUB_WORKSPACE"/trusted-pnpm/*) ;;
             *)
               echo "pnpm bin 未位于可信工作区目录。" >&2
               exit 1
               ;;
           esac
-          chmod -R u+rwX,go+rX,go-w "$GITHUB_WORKSPACE/trusted-pnpm"
-          sudo -u gatecandidate test -x "$TRUSTED_PNPM_BIN/pnpm"
+          source_pnpm="$(readlink -f -- "$ACTION_PNPM_BIN/pnpm")"
+          case "$source_pnpm" in
+            "$GITHUB_WORKSPACE"/trusted-pnpm/*) ;;
+            *)
+              echo "pnpm 可执行文件逃离可信安装目录。" >&2
+              exit 1
+              ;;
+          esac
+          [[ -f "$source_pnpm" && -x "$source_pnpm" ]]
+          sudo install -d -o 0 -g 0 -m 0755 /opt/trusted-pnpm/bin
+          sudo install -o 0 -g 0 -m 0755 "$source_pnpm" /opt/trusted-pnpm/bin/pnpm
+          pnpm_version="$(sudo -u gatecandidate env -i PATH=/opt/trusted-pnpm/bin /opt/trusted-pnpm/bin/pnpm --version)"
+          [[ "$pnpm_version" == "11.12.0" ]]
 
       - name: Install frozen dependencies without candidate lifecycle
         env:
-          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
+          TRUSTED_PNPM_BIN: /opt/trusted-pnpm/bin
         shell: bash
         run: |
           cleanup_install_identity() {
@@ -177,7 +189,7 @@ jobs:
           OBJECT_FORMAT: ${{ inputs.object_format }}
           PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
           PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
-          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
+          TRUSTED_PNPM_BIN: /opt/trusted-pnpm/bin
         shell: bash
         run: |
           sudo env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
