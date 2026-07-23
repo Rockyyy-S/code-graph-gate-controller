@@ -40,7 +40,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: caf2de1b562e4bd22aadb714d917ac18c6ce9ba7
+          ref: c5ea72c3e40607f59c01574d044e1c123ffeffec
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
