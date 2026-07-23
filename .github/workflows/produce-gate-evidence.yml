@@ -141,8 +141,7 @@ jobs:
           [[ "$(stat -c '%U:%G %a' /opt/trusted-pnpm/bin/pnpm)" == "root:root 755" ]]
           [[ "$(stat -c '%U:%G' /opt/trusted-pnpm/bin/dist/pnpm.mjs)" == "root:root" ]]
           [[ -z "$(find /opt/trusted-pnpm -perm /022 -print -quit)" ]]
-          cd -- /tmp/gatecandidate-install-home
-          pnpm_version="$(sudo -u gatecandidate env -i \
+          pnpm_version="$(sudo -u gatecandidate env -i --chdir=/tmp/gatecandidate-install-home \
             HOME=/tmp/gatecandidate-install-home \
             PATH=/opt/trusted-pnpm/bin \
             /opt/trusted-pnpm/bin/pnpm --version)"
