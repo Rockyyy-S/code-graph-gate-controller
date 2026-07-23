@@ -6,7 +6,10 @@ import {
   validateProviderWorkflowRun,
   validateVerifiedAttestations,
 } from "../lib/attestation-policy.mjs";
-import { evaluateControllerCandidate } from "../lib/controller-policy.mjs";
+import {
+  evaluateControllerCandidate,
+  selectFreshDriftMonitorRun,
+} from "../lib/controller-policy.mjs";
 import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
 import { validateTrustedRegistryApproval } from "../lib/registry.mjs";
 
@@ -188,19 +191,10 @@ async function readCandidateRegistry(headOid) {
 /** Controller 只在独立 monitor 最近成功且未过期时发布正式结论。 */
 async function assertFreshDriftMonitor() {
   const runs = await githubJson(
-    `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs?event=schedule&per_page=10`,
+    `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs?per_page=10`,
     { token: controllerRepositoryToken },
   );
-  const latest = runs.workflow_runs
-    .filter((run) => run.status === "completed")
-    .sort((left, right) => new Date(right.updated_at) - new Date(left.updated_at))[0];
-  if (
-    latest === undefined ||
-    latest.conclusion !== "success" ||
-    Date.now() - Date.parse(latest.updated_at) > 15 * 60 * 1000
-  ) {
-    throw new Error("独立 drift monitor 缺失、失败或已过期，Controller fail closed。\n");
-  }
+  selectFreshDriftMonitorRun(runs.workflow_runs);
 }
 
 /** 使用 Controller GitHub App installation token 发布唯一 architecture-required check。 */

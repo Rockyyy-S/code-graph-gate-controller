@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
-import { evaluateControllerCandidate } from "../lib/controller-policy.mjs";
+import {
+  evaluateControllerCandidate,
+  selectFreshDriftMonitorRun,
+} from "../lib/controller-policy.mjs";
 
 const workflowSha = "1".repeat(40);
 
@@ -118,4 +121,49 @@ test("拒绝旧 head、旧 registry、错误 producer 和缺失 required evidenc
   const missing = createFixture();
   missing.artifact.evidence = [];
   assert.deepEqual(evaluateControllerCandidate(missing).missingEvidenceGateIds, ["unit"]);
+});
+
+test("Controller 接受最近成功的 schedule 或 workflow_dispatch monitor run", () => {
+  const now = Date.parse("2026-07-23T07:00:00Z");
+  const runs = [
+    {
+      conclusion: "success",
+      event: "schedule",
+      status: "completed",
+      updated_at: "2026-07-23T06:40:00Z",
+    },
+    {
+      conclusion: "success",
+      event: "workflow_dispatch",
+      status: "completed",
+      updated_at: "2026-07-23T06:56:00Z",
+    },
+  ];
+  assert.equal(selectFreshDriftMonitorRun(runs, now), runs[1]);
+});
+
+test("Controller 拒绝失败、过期或非可信事件的 monitor run", () => {
+  const now = Date.parse("2026-07-23T07:00:00Z");
+  for (const run of [
+    {
+      conclusion: "failure",
+      event: "schedule",
+      status: "completed",
+      updated_at: "2026-07-23T06:59:00Z",
+    },
+    {
+      conclusion: "success",
+      event: "workflow_dispatch",
+      status: "completed",
+      updated_at: "2026-07-23T06:40:00Z",
+    },
+    {
+      conclusion: "success",
+      event: "push",
+      status: "completed",
+      updated_at: "2026-07-23T06:59:00Z",
+    },
+  ]) {
+    assert.throws(() => selectFreshDriftMonitorRun([run], now), /drift monitor/u);
+  }
 });
