@@ -23,6 +23,33 @@ test("reusable producer 固定检出已批准的不可变 GateHarness", async ()
   assert.doesNotMatch(checkoutBlock, /ref:\s+(?:main|master|HEAD)\b/u);
 });
 
+test("候选执行 job 不持有 OIDC/attestation 权限，签名在干净 runner 完成", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const executionJob = /gate-execution:\s*[\s\S]*?(?=\n  gate-evidence:)/u.exec(workflow)?.[0];
+  const attestationJob = /\n  gate-evidence:\s*[\s\S]*$/u.exec(workflow)?.[0];
+
+  assert.equal(typeof executionJob, "string");
+  assert.equal(typeof attestationJob, "string");
+  assert.doesNotMatch(executionJob, /id-token:\s*write|attestations:\s*write/u);
+  assert.match(attestationJob, /needs:\s*gate-execution/u);
+  assert.match(attestationJob, /id-token:\s*write/u);
+  assert.match(attestationJob, /attestations:\s*write/u);
+  assert.match(attestationJob, /actions\/download-artifact@[0-9a-f]{40}/u);
+  assert.match(attestationJob, /actions\/attest-build-provenance@[0-9a-f]{40}/u);
+});
+
+test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+
+  assert.match(workflow, /pnpm --dir candidate install --frozen-lockfile --ignore-scripts/u);
+  assert.match(workflow, /sudo -u gatecandidate env -i/u);
+  assert.match(workflow, /sudo chmod -R go-w candidate/u);
+  assert.match(workflow, /install -d -m 0700 artifacts/u);
+  assert.match(workflow, /--gate-uid 20001/u);
+  assert.match(workflow, /--gate-gid 20001/u);
+  assert.match(workflow, /env -i HOME=/u);
+});
+
 test("Controller attestation policy 与已批准 producer SHA 保持一致", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),

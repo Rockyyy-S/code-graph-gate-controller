@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "approvalKind": "initial-gate-registry-bootstrap",
+  "approvedBy": "Rockyyy-S",
+  "approvedAt": "2026-07-23T12:16:19+08:00",
+  "providerRepositoryId": "1303415307",
+  "sourceCommit": "500120460fec6ed5471be091c5863b45e0d06503",
+  "gateRegistryDigest": "dba16618f2520c81be1a208d054eabad5eba50fc10a72d65b03cdd486a0c43f7",
+  "producerWorkflowSha": "616633c1e594174e4964672f1d04e94718995940"
+}

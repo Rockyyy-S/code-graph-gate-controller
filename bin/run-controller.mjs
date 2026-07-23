@@ -10,6 +10,8 @@ import {
   evaluateControllerCandidate,
   selectFreshDriftMonitorRun,
 } from "../lib/controller-policy.mjs";
+import { classifyCheckReplay } from "../lib/check-replay-policy.mjs";
+import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
 import { validateTrustedRegistryApproval } from "../lib/registry.mjs";
 
@@ -29,9 +31,17 @@ const trustedRecord = JSON.parse(await readFile("trusted/registry.json", "utf8")
 const trustedApproval = JSON.parse(
   await readFile("trusted/registry-approval.json", "utf8"),
 );
+const previousTrustedRecord = JSON.parse(
+  await readFile("trusted/previous-registry.json", "utf8"),
+);
+const previousTrustedApproval = JSON.parse(
+  await readFile("trusted/previous-registry-approval.json", "utf8"),
+);
 validateTrustedRegistryApproval({
   approval: trustedApproval,
   expectedProducerWorkflowSha: producerWorkflowSha,
+  previousApproval: previousTrustedApproval,
+  previousRecord: previousTrustedRecord,
   record: trustedRecord,
 });
 const pulls = await githubJson(`repos/${targetRepository}/pulls?state=open&per_page=100`);
@@ -159,13 +169,18 @@ async function processPullRequest(pull, trustedRecord) {
       workflowRef:
         `${targetRepository}/.github/workflows/architecture-required.yml@refs/pull/${pull.number}/merge`,
     };
-    const summary = JSON.stringify({ providerEvidenceRecord, result });
+    const replayDigest = sha256CanonicalJson({
+      artifactDigest: attestationRecord.artifactDigest,
+      gateEvidenceDigests: result.gateEvidenceDigests ?? [],
+    });
+    const summary = JSON.stringify({ providerEvidenceRecord, replayDigest, result });
     await publishCheck(
       headOid,
       "completed",
       result.conclusion,
       summary,
       result.casKey ?? null,
+      replayDigest,
     );
   } catch (error) {
     await publishCheck(
@@ -198,16 +213,37 @@ async function assertFreshDriftMonitor() {
 }
 
 /** 使用 Controller GitHub App installation token 发布唯一 architecture-required check。 */
-async function publishCheck(headOid, status, conclusion, summary, casKey) {
+async function publishCheck(
+  headOid,
+  status,
+  conclusion,
+  summary,
+  casKey,
+  replayDigest = null,
+) {
   const existing = await githubJson(`repos/${targetRepository}/commits/${headOid}/check-runs`);
   const appOwned = existing.check_runs.filter(
     (check) => check.name === "architecture-required" && `${check.app?.id ?? ""}` === controllerAppId,
   );
-  const exactReplay = appOwned.find(
-    (check) => casKey !== null && check.output?.summary?.includes(`\"casKey\":\"${casKey}\"`),
-  );
-  if (exactReplay !== undefined && exactReplay.status === status && exactReplay.conclusion === conclusion) {
+  const replayAction = classifyCheckReplay({
+    casKey,
+    checks: appOwned,
+    conclusion,
+    replayDigest,
+    status,
+  });
+  if (["idempotent", "idempotent-conflict"].includes(replayAction)) {
     return;
+  }
+  if (replayAction === "conflict") {
+    status = "completed";
+    conclusion = "failure";
+    summary = JSON.stringify({
+      casKey,
+      reason: "同一 umbrella CAS 出现不同 artifact/evidence digest，Controller fail closed。",
+      replayConflict: true,
+      replayDigest,
+    });
   }
   await githubJson(`repos/${targetRepository}/check-runs`, {
     body: {

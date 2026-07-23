@@ -4,6 +4,7 @@ import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
   parseEvidenceProducerId,
+  UNBOUND_GATE_IMPLEMENTATION_DIGEST_V1,
   validateRegistry,
   validateTrustedRegistryApproval,
   validateTrustedRegistryRecord,
@@ -57,6 +58,9 @@ test("registry 对摘要漂移、未知字段和非法 trigger fail closed", () 
   const invalidTrigger = createRegistry({ triggerPaths: [] });
   assert.throws(() => validateRegistry(invalidTrigger), /triggerPaths/u);
 
+  const unsupportedTrigger = createRegistry({ triggerPaths: ["src/[ab].ts"] });
+  assert.throws(() => validateRegistry(unsupportedTrigger), /triggerPaths/u);
+
   const duplicateCheckId = createRegistry();
   const secondDefinition = {
     ...duplicateCheckId.gates[0].gateDefinition,
@@ -108,6 +112,15 @@ test("可信 registry sequence=2 绑定批准证据、候选提交和新 produce
   const record = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
+  const previousApproval = JSON.parse(
+    await readFile(
+      new URL("../trusted/previous-registry-approval.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const previousRecord = JSON.parse(
+    await readFile(new URL("../trusted/previous-registry.json", import.meta.url), "utf8"),
+  );
 
   validateTrustedRegistryRecord(record);
   assert.equal(record.sequence, 2);
@@ -123,6 +136,8 @@ test("可信 registry sequence=2 绑定批准证据、候选提交和新 produce
     validateTrustedRegistryApproval({
       approval,
       expectedProducerWorkflowSha: approval.producerWorkflowSha,
+      previousApproval,
+      previousRecord,
       record,
     }),
   );
@@ -135,10 +150,21 @@ test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移",
   const record = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
+  const previousApproval = JSON.parse(
+    await readFile(
+      new URL("../trusted/previous-registry-approval.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const previousRecord = JSON.parse(
+    await readFile(new URL("../trusted/previous-registry.json", import.meta.url), "utf8"),
+  );
   const mutations = [
     (value) => (value.sequence = 1),
     (value) => (value.sourceCommit = "f".repeat(40)),
     (value) => (value.gateRegistryDigest = "f".repeat(64)),
+    (value) => (value.previousGateRegistryDigest = "f".repeat(64)),
+    (value) => (value.previousProducerWorkflowSha = "f".repeat(40)),
     (value) => (value.producerWorkflowSha = "f".repeat(40)),
   ];
   for (const mutate of mutations) {
@@ -149,9 +175,98 @@ test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移",
         validateTrustedRegistryApproval({
           approval: drifted,
           expectedProducerWorkflowSha: approval.producerWorkflowSha,
+          previousApproval,
+          previousRecord,
           record,
         }),
       /TrustedGateRegistryApprovalV1/u,
     );
   }
+
+  assert.throws(
+    () =>
+      validateTrustedRegistryApproval({
+        approval,
+        expectedProducerWorkflowSha: approval.producerWorkflowSha,
+        previousApproval,
+        previousRecord: { ...previousRecord, sequence: 9 },
+        record,
+      }),
+    /TrustedGateRegistry/u,
+  );
+});
+
+test("sequence=3 迁移把未绑定实现状态固定为唯一 sentinel", () => {
+  const previousApproval = {
+    approvalKind: "gate-registry-producer-migration",
+    approvedAt: "2026-07-23T01:00:00Z",
+    approvedBy: "owner",
+    gateRegistryDigest: "a".repeat(64),
+    previousGateRegistryDigest: "9".repeat(64),
+    previousProducerWorkflowSha: "1".repeat(40),
+    producerWorkflowSha: "2".repeat(40),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 2,
+    sourceCommit: "3".repeat(40),
+  };
+  const previousRecord = {
+    approvalEvidenceDigest: sha256CanonicalJson(previousApproval),
+    effectiveAt: "2026-07-23T01:00:00Z",
+    gateRegistryDigest: previousApproval.gateRegistryDigest,
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 2,
+    sourceCommit: previousApproval.sourceCommit,
+  };
+  const approval = {
+    approvalKind: "gate-trust-root-migration",
+    approvedAt: "2026-07-23T02:00:00Z",
+    approvedBy: "owner",
+    gateImplementationDigest: "b".repeat(64),
+    gateRegistryDigest: "c".repeat(64),
+    previousGateImplementationDigest: UNBOUND_GATE_IMPLEMENTATION_DIGEST_V1,
+    previousGateRegistryDigest: previousRecord.gateRegistryDigest,
+    previousProducerWorkflowSha: previousApproval.producerWorkflowSha,
+    producerWorkflowSha: "4".repeat(40),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 3,
+    sourceCommit: "5".repeat(40),
+  };
+  const record = {
+    approvalEvidenceDigest: sha256CanonicalJson(approval),
+    effectiveAt: "2026-07-23T02:00:00Z",
+    gateImplementationDigest: approval.gateImplementationDigest,
+    gateRegistryDigest: approval.gateRegistryDigest,
+    providerRepositoryId: approval.providerRepositoryId,
+    schemaVersion: 1,
+    sequence: 3,
+    sourceCommit: approval.sourceCommit,
+  };
+
+  assert.doesNotThrow(() =>
+    validateTrustedRegistryApproval({
+      approval,
+      expectedProducerWorkflowSha: approval.producerWorkflowSha,
+      previousApproval,
+      previousRecord,
+      record,
+    }),
+  );
+
+  assert.throws(
+    () =>
+      validateTrustedRegistryApproval({
+        approval: {
+          ...approval,
+          previousGateImplementationDigest: "0".repeat(64),
+        },
+        expectedProducerWorkflowSha: approval.producerWorkflowSha,
+        previousApproval,
+        previousRecord,
+        record,
+      }),
+    /TrustedGateRegistryApprovalV1/u,
+  );
 });

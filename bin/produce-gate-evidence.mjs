@@ -18,6 +18,10 @@ function parseArguments(argv) {
     "--base-oid",
     "--candidate-root",
     "--controller-repository",
+    "--gate-gid",
+    "--gate-home",
+    "--gate-temp-directory",
+    "--gate-uid",
     "--head-oid",
     "--object-format",
     "--provider-repository-id",
@@ -33,6 +37,10 @@ function parseArguments(argv) {
     baseOid: values.get("--base-oid"),
     candidateRoot: path.resolve(values.get("--candidate-root")),
     controllerRepository: values.get("--controller-repository"),
+    gateGid: parsePositiveInteger(values.get("--gate-gid"), "--gate-gid"),
+    gateHome: path.resolve(values.get("--gate-home")),
+    gateTempDirectory: path.resolve(values.get("--gate-temp-directory")),
+    gateUid: parsePositiveInteger(values.get("--gate-uid"), "--gate-uid"),
     headOid: values.get("--head-oid"),
     objectFormat: values.get("--object-format"),
     providerRepositoryId: values.get("--provider-repository-id"),
@@ -40,6 +48,18 @@ function parseArguments(argv) {
     workflowFile: values.get("--workflow-file"),
     workflowSha: values.get("--workflow-sha"),
   };
+}
+
+/** 将 UID/GID 参数收敛为正安全整数，避免平台隐式转换。 */
+function parsePositiveInteger(value, name) {
+  if (!/^[1-9][0-9]*$/u.test(value ?? "")) {
+    throw new Error(`${name} 必须是正整数。`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} 超出安全整数范围。`);
+  }
+  return parsed;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

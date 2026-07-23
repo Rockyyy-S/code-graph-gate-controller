@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateApplicability } from "../lib/harness.mjs";
+import {
+  didRequiredBlockingGatesPass,
+  evaluateApplicability,
+} from "../lib/harness.mjs";
 import { parseNameStatusZ } from "../lib/git-context.mjs";
 
 test("triggerPaths 缺失时 always applicable", () => {
@@ -23,5 +26,25 @@ test("NUL name-status 对非法 UTF-8 路径 fail closed", () => {
   assert.throws(
     () => parseNameStatusZ(Buffer.from([0x41, 0x00, 0xff, 0x00])),
     /UTF-8/u,
+  );
+  assert.throws(
+    () => parseNameStatusZ(Buffer.from("A\0file.ts", "utf8")),
+    /NUL|截断/u,
+  );
+});
+
+test("non-blocking gate 失败不改变 required blocking 结论", () => {
+  const evidence = [
+    { gateId: "required", status: "pass" },
+    { gateId: "advisory", status: "fail" },
+  ];
+
+  assert.equal(
+    didRequiredBlockingGatesPass(evidence, new Set(["required"])),
+    true,
+  );
+  assert.equal(
+    didRequiredBlockingGatesPass(evidence, new Set(["required", "advisory"])),
+    false,
   );
 });

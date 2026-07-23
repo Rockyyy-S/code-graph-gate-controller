@@ -92,6 +92,26 @@ test("Controller 接受完整绑定的 pass evidence", () => {
   assert.match(result.casKey, /^1303415307:b{40}:/);
 });
 
+test("Controller 不要求当前路径不适用的 blocking gate 证据", () => {
+  const fixture = createFixture();
+  fixture.registry.gates[0].gateDefinition.triggerPaths = ["docs/**"];
+  fixture.registry.gates[0].gateDefinitionDigest = sha256CanonicalJson(
+    fixture.registry.gates[0].gateDefinition,
+  );
+  fixture.trustedRecord.gateRegistryDigest = sha256CanonicalJson(fixture.registry);
+  fixture.artifact.gateRegistryDigest = fixture.trustedRecord.gateRegistryDigest;
+  fixture.artifact.evaluationContext.gateRegistryDigest = fixture.trustedRecord.gateRegistryDigest;
+  const { evaluationContextDigest: _oldDigest, ...contextInput } =
+    fixture.artifact.evaluationContext;
+  fixture.artifact.evaluationContext.evaluationContextDigest =
+    sha256CanonicalJson(contextInput);
+  fixture.artifact.evidence = [];
+
+  const result = evaluateControllerCandidate(fixture);
+  assert.equal(result.status, "accepted");
+  assert.deepEqual(result.missingEvidenceGateIds, []);
+});
+
 test("Controller 拒绝 artifact 未知字段和未批准实现摘要", () => {
   const unknownField = createFixture();
   unknownField.artifact.untrusted = true;

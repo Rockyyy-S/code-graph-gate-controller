@@ -40,6 +40,7 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
     fixture.registry,
     {
       protectedDirectories: [],
+      optionalProtectedPaths: [],
       protectedPaths: ["scripts/check.mjs"],
     },
   );
@@ -53,6 +54,7 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
     fixture.registry,
     {
       protectedDirectories: [],
+      optionalProtectedPaths: [],
       protectedPaths: ["scripts/check.mjs"],
     },
   );
@@ -68,6 +70,7 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
     fixture.registry,
     {
       protectedDirectories: [],
+      optionalProtectedPaths: [],
       protectedPaths: ["scripts/check.mjs"],
     },
   );
@@ -87,6 +90,7 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
     fixture.registry,
     {
       protectedDirectories: [],
+      optionalProtectedPaths: [],
       protectedPaths: ["scripts/check.mjs"],
     },
   );
@@ -99,12 +103,14 @@ test("受保护目录整体绑定传递 helper", async (context) => {
   await writeFile(path.join(fixture.root, "scripts", "helper.mjs"), "export const ok = true;\n");
   const baseline = await computeGateImplementationDigest(fixture.root, fixture.registry, {
     protectedDirectories: ["scripts"],
+    optionalProtectedPaths: [],
     protectedPaths: [],
   });
 
   await writeFile(path.join(fixture.root, "scripts", "helper.mjs"), "export const ok = false;\n");
   const helperDrift = await computeGateImplementationDigest(fixture.root, fixture.registry, {
     protectedDirectories: ["scripts"],
+    optionalProtectedPaths: [],
     protectedPaths: [],
   });
   assert.notEqual(helperDrift.digest, baseline.digest);

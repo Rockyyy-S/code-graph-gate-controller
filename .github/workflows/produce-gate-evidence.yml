@@ -23,19 +23,18 @@ on:
         type: string
 
 permissions:
-  actions: read
-  attestations: write
   contents: read
-  id-token: write
 
 jobs:
-  gate-evidence:
-    name: gate-evidence
+  gate-execution:
+    name: gate-execution
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
       - name: Checkout immutable GateHarness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
         with:
           fetch-depth: 1
           path: trusted-harness
@@ -44,7 +43,7 @@ jobs:
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
         with:
           fetch-depth: 1
           path: trusted-state
@@ -53,7 +52,7 @@ jobs:
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout exact candidate OID
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
         with:
           fetch-depth: 0
           path: candidate
@@ -62,43 +61,122 @@ jobs:
           repository: ${{ inputs.repository }}
 
       - name: Install pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # 固定 v4 提交
         with:
           run_install: false
           version: 11.12.0
 
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 固定 v4 提交
         with:
           node-version: 24.18.0
 
-      - name: Install candidate dependencies from lockfile
-        working-directory: candidate
-        run: pnpm install --frozen-lockfile
+      - name: Prepare isolated candidate identity and artifact directory
+        shell: bash
+        run: |
+          sudo groupadd --gid 20001 gatecandidate
+          sudo useradd --uid 20001 --gid 20001 --home-dir /tmp/gatecandidate-home --no-create-home --shell /usr/sbin/nologin gatecandidate
+          sudo install -d -o 20001 -g 20001 -m 0700 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
+          install -d -m 0700 artifacts trusted-harness-home
+
+      - name: Install frozen dependencies without candidate lifecycle
+        shell: bash
+        run: |
+          sudo chown -R 20001:20001 candidate
+          sudo -u gatecandidate env -i \
+            CI=true \
+            HOME=/tmp/gatecandidate-home \
+            LANG=C.UTF-8 \
+            PATH="$PATH" \
+            TMPDIR=/tmp/gatecandidate-tmp \
+            XDG_CACHE_HOME=/tmp/gatecandidate-home/.cache \
+            XDG_CONFIG_HOME=/tmp/gatecandidate-home/.config \
+            XDG_DATA_HOME=/tmp/gatecandidate-home/.local/share \
+            pnpm --dir candidate install --frozen-lockfile --ignore-scripts
+          sudo chown -R "$(id -u):$(id -g)" candidate
+          sudo chmod -R go-w candidate
+
+      - name: Grant candidate writes only to generated output directories
+        shell: bash
+        run: |
+          outputs=(
+            apps/cli/dist
+            apps/extension/dist
+            apps/graph-service/dist
+            apps/webview/dist
+            packages/adapters/analyzer-typescript/dist
+            packages/adapters/git-local/dist
+            packages/adapters/store-sqlite/dist
+            packages/application/dist
+            packages/contracts/dist
+            packages/domain/dist
+            packages/service-client/dist
+            node_modules/.vite
+          )
+          for relative_path in "${outputs[@]}"; do
+            output_path="candidate/$relative_path"
+            if [[ -L "$output_path" ]]; then
+              echo "拒绝符号链接输出目录：$relative_path" >&2
+              exit 1
+            fi
+            sudo install -d -o 20001 -g 20001 -m 0700 "$output_path"
+            sudo chown -R 20001:20001 "$output_path"
+            sudo chmod -R u+rwX,go-rwx "$output_path"
+          done
 
       - name: Produce child gate evidence
-        run: >-
-          node trusted-harness/bin/produce-gate-evidence.mjs
-          --artifact-directory artifacts
-          --base-oid "${{ inputs.base_oid }}"
-          --candidate-root candidate
-          --controller-repository Rockyyy-S/code-graph-gate-controller
-          --head-oid "${{ inputs.head_oid }}"
-          --object-format "${{ inputs.object_format }}"
-          --provider-repository-id "${{ inputs.provider_repository_id }}"
-          --trusted-record trusted-state/trusted/registry.json
-          --workflow-file produce-gate-evidence.yml
-          --workflow-sha "${{ inputs.producer_workflow_sha }}"
+        shell: bash
+        run: |
+          env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
+            --artifact-directory artifacts \
+            --base-oid "${{ inputs.base_oid }}" \
+            --candidate-root candidate \
+            --controller-repository Rockyyy-S/code-graph-gate-controller \
+            --gate-gid 20001 \
+            --gate-home /tmp/gatecandidate-home \
+            --gate-temp-directory /tmp/gatecandidate-tmp \
+            --gate-uid 20001 \
+            --head-oid "${{ inputs.head_oid }}" \
+            --object-format "${{ inputs.object_format }}" \
+            --provider-repository-id "${{ inputs.provider_repository_id }}" \
+            --trusted-record trusted-state/trusted/registry.json \
+            --workflow-file produce-gate-evidence.yml \
+            --workflow-sha "${{ inputs.producer_workflow_sha }}"
+
+      - name: Upload unsigned evidence from isolated execution job
+        if: ${{ always() && hashFiles('artifacts/**') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # 固定 v4 提交
+        with:
+          if-no-files-found: error
+          name: gate-evidence-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          path: artifacts/
+          retention-days: 1
+
+  gate-evidence:
+    name: gate-evidence
+    needs: gate-execution
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download unsigned evidence into a clean runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 固定 v4 提交
+        with:
+          name: gate-evidence-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          path: artifacts
 
       - name: Attest exact evidence artifact
-        if: ${{ always() && hashFiles('artifacts/gate-evidence.json') != '' }}
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # 固定 v4 提交
         with:
           subject-path: artifacts/gate-evidence.json
 
       - name: Upload child evidence and bounded logs
-        if: ${{ always() && hashFiles('artifacts/**') != '' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # 固定 v4 提交
         with:
           if-no-files-found: error
           name: gate-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
