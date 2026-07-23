@@ -18,7 +18,7 @@ import { validateTrustedRegistryApproval } from "../lib/registry.mjs";
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
 const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
-const producerWorkflowSha = "7625ab3c58d6e0fd4d6b16e577609ab96b127870";
+const producerWorkflowSha = "0792e37950ea90cd653563b571811e1e1628dfd8";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
 
