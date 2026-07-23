@@ -82,7 +82,7 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /source_candidate="\$\(realpath -- candidate\)"/u);
   assert.match(workflow, /candidate_parent=\/tmp\/gatecandidate-root/u);
   assert.match(workflow, /candidate_root="\$candidate_parent\/worktree"/u);
-  assert.match(workflow, /install -d -o 0 -g 20001 -m 0750 "\$candidate_parent"/u);
+  assert.match(workflow, /install -d -o 0 -g 0 -m 0711 "\$candidate_parent"/u);
   assert.match(workflow, /git -C "\$source_candidate" rev-parse HEAD/u);
   assert.match(workflow, /sudo cp -a -- "\$source_candidate\/\." "\$candidate_root\/"/u);
   assert.match(workflow, /sudo git -c safe\.directory="\$candidate_root" -C "\$candidate_root" rev-parse HEAD/u);

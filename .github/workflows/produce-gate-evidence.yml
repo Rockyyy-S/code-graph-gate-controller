@@ -167,7 +167,7 @@ jobs:
           [[ "$(git -C "$source_candidate" rev-parse HEAD)" == "$HEAD_OID" ]]
           [[ "$(realpath -m -- "$candidate_parent")" == "$candidate_parent" && ! -e "$candidate_parent" ]]
           # 父目录保持 root-owned，阻止安装阶段替换固定候选路径。
-          sudo install -d -o 0 -g 20001 -m 0750 "$candidate_parent"
+          sudo install -d -o 0 -g 0 -m 0711 "$candidate_parent"
           sudo install -d -o 20001 -g 20001 -m 0700 "$candidate_root"
           sudo cp -a -- "$source_candidate/." "$candidate_root/"
           sudo chown -R 20001:20001 "$candidate_root"
