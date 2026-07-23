@@ -15,6 +15,9 @@ on:
       provider_repository_id:
         required: true
         type: string
+      producer_workflow_sha:
+        required: true
+        type: string
       repository:
         required: true
         type: string
@@ -85,7 +88,7 @@ jobs:
           --provider-repository-id "${{ inputs.provider_repository_id }}"
           --trusted-record trusted-state/trusted/registry.json
           --workflow-file produce-gate-evidence.yml
-          --workflow-sha "${{ github.workflow_sha }}"
+          --workflow-sha "${{ inputs.producer_workflow_sha }}"
 
       - name: Attest exact evidence artifact
         if: ${{ always() && hashFiles('artifacts/gate-evidence.json') != '' }}
