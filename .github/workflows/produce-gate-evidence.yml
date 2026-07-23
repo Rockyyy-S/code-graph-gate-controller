@@ -136,7 +136,7 @@ jobs:
             pnpm --dir candidate install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
           cleanup_install_identity
           trap - EXIT
-          sudo install -d -o 20001 -g 20001 -m 0700 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
+          sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
           sudo chown -R "$(id -u):$(id -g)" candidate
           sudo chmod -R go-w candidate
 
@@ -180,7 +180,7 @@ jobs:
           TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
         shell: bash
         run: |
-          env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
+          sudo env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
             --artifact-directory artifacts \
             --base-oid "$BASE_OID" \
             --candidate-root candidate \

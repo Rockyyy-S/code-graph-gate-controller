@@ -58,10 +58,12 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   );
   assert.match(workflow, /sudo pkill -KILL -u 20001 \|\| true/u);
   assert.match(workflow, /gatecandidate-install-home/u);
+  assert.match(workflow, /install -d -o 0 -g 0 -m 0711 \/tmp\/gatecandidate-home/u);
   assert.match(workflow, /candidate_root="\$\(realpath -- candidate\)"/u);
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.match(workflow, /sudo -u gatecandidate env -i/u);
+  assert.match(workflow, /sudo env -i HOME=/u);
   assert.match(workflow, /sudo chmod -R go-w candidate/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);
   assert.match(workflow, /--gate-uid 20001/u);

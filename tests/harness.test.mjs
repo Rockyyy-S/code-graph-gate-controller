@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import {
   createGateEnvironment,
+  createGateRuntimePaths,
   createTrustedGateArguments,
   didRequiredBlockingGatesPass,
   evaluateApplicability,
@@ -72,4 +74,20 @@ test("嵌套 pnpm 继承 hooks 禁用环境", () => {
   assert.equal(environment.npm_config_ignore_pnpmfile, "true");
   assert.equal(environment.PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS, "false");
   assert.equal(environment.PNPM_CONFIG_IGNORE_PNPMFILE, "true");
+});
+
+test("每个 gate 使用独立 HOME 与 TMP 路径", () => {
+  assert.deepEqual(
+    createGateRuntimePaths(
+      {
+        gateHome: "/tmp/gate-home",
+        gateTempDirectory: "/tmp/gate-tmp",
+      },
+      "unit",
+    ),
+    {
+      gateHome: path.join("/tmp/gate-home", "unit"),
+      gateTempDirectory: path.join("/tmp/gate-tmp", "unit"),
+    },
+  );
 });
