@@ -1,7 +1,11 @@
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  validateProviderGateJob,
+  validateProviderWorkflowRun,
+  validateVerifiedAttestations,
+} from "../lib/attestation-policy.mjs";
 import { evaluateControllerCandidate } from "../lib/controller-policy.mjs";
 import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
 
@@ -26,7 +30,6 @@ for (const pull of pulls) {
 /** 对单个 PR 只消费 provider API 返回的 run/artifact，并发布 App-owned umbrella check。 */
 async function processPullRequest(pull, trustedRecord) {
   const headOid = pull.head.sha;
-  const baseOid = pull.base.sha;
   const runs = await githubJson(
     `repos/${targetRepository}/actions/workflows/architecture-required.yml/runs?event=pull_request&head_sha=${headOid}&per_page=20`,
   );
@@ -58,6 +61,30 @@ async function processPullRequest(pull, trustedRecord) {
   }
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), "architecture-controller-"));
   try {
+    const expectedRun = {
+      headOid,
+      providerRepositoryId: targetRepositoryId,
+      runAttempt: run.run_attempt,
+      runId: `${run.id}`,
+    };
+    validateProviderWorkflowRun({ expected: expectedRun, run });
+    const jobsResponse = await githubJson(
+      `repos/${targetRepository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
+    );
+    const namedJobs = jobsResponse.jobs.filter(
+      (job) => job.name === "gate-evidence / gate-evidence",
+    );
+    if (namedJobs.length !== 1) {
+      throw new Error("provider gate job 缺失、重复或名称漂移。\n");
+    }
+    const checkRun = await githubJson(
+      `repos/${targetRepository}/check-runs/${namedJobs[0].id}`,
+    );
+    const providerJobRecord = validateProviderGateJob({
+      checkRun,
+      expected: expectedRun,
+      jobs: jobsResponse.jobs,
+    });
     const archivePath = path.join(temporaryRoot, "artifact.zip");
     const archive = await downloadArtifact(matching[0].archive_download_url);
     await writeFile(archivePath, archive);
@@ -69,25 +96,37 @@ async function processPullRequest(pull, trustedRecord) {
       evidencePath,
       "--repo",
       targetRepository,
-      "--signer-repo",
-      controllerRepository,
+      "--cert-oidc-issuer",
+      "https://token.actions.githubusercontent.com",
       "--signer-workflow",
       `github.com/${controllerRepository}/.github/workflows/produce-gate-evidence.yml`,
       "--signer-digest",
       producerWorkflowSha,
-      "--source-digest",
-      headOid,
       "--deny-self-hosted-runners",
       "--format",
       "json",
     ]);
     const verifiedAttestations = JSON.parse(attestationOutput.toString("utf8"));
-    if (!Array.isArray(verifiedAttestations) || verifiedAttestations.length === 0) {
-      throw new Error("GitHub attestation verification 未返回验证结果。\n");
-    }
-    const artifact = JSON.parse(await readFile(evidencePath, "utf8"));
-    const registry = await readCandidateRegistry(headOid);
+    const evidenceBytes = await readFile(evidencePath);
     const currentPull = await githubJson(`repos/${targetRepository}/pulls/${pull.number}`);
+    if (!/^[a-f0-9]{40}$/u.test(currentPull.merge_commit_sha ?? "")) {
+      throw new Error("provider 当前 PR merge commit OID 缺失或非法。\n");
+    }
+    const attestationRecord = validateVerifiedAttestations({
+      evidenceBytes,
+      expected: {
+        mergeCommitOid: currentPull.merge_commit_sha,
+        producerWorkflowSha,
+        providerRepository: targetRepository,
+        providerRepositoryId: targetRepositoryId,
+        pullNumber: pull.number,
+        runAttempt: run.run_attempt,
+        runId: `${run.id}`,
+      },
+      verifiedAttestations,
+    });
+    const artifact = JSON.parse(evidenceBytes.toString("utf8"));
+    const registry = await readCandidateRegistry(headOid);
     const result = evaluateControllerCandidate({
       artifact,
       currentProviderContext: {
@@ -98,23 +137,17 @@ async function processPullRequest(pull, trustedRecord) {
       registry,
       trustedRecord,
     });
-    const attestationRecord = {
-      artifactDigest: createHash("sha256").update(await readFile(evidencePath)).digest("hex"),
-      eventName: run.event,
+    const providerEvidenceRecord = {
+      ...attestationRecord,
+      ...providerJobRecord,
       gateEvidenceDigests: result.gateEvidenceDigests ?? [],
-      githubActionsAppId: 15368,
       headOid,
-      jobId: "gate-evidence",
-      jobWorkflowRef: `${controllerRepository}/.github/workflows/produce-gate-evidence.yml@${producerWorkflowSha}`,
-      oidcIssuer: "https://token.actions.githubusercontent.com",
-      oidcVerificationResult: "verified-by-gh-attestation",
-      providerRepositoryId: targetRepositoryId,
-      providerRunId: `${run.id}`,
-      runAttempt: run.run_attempt,
+      jobName: "gate-evidence / gate-evidence",
       schemaVersion: 1,
-      workflowRef: `${targetRepository}/.github/workflows/architecture-required.yml@${headOid}`,
+      workflowRef:
+        `${targetRepository}/.github/workflows/architecture-required.yml@refs/pull/${pull.number}/merge`,
     };
-    const summary = JSON.stringify({ attestationRecord, result });
+    const summary = JSON.stringify({ providerEvidenceRecord, result });
     await publishCheck(
       headOid,
       "completed",

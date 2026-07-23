@@ -25,4 +25,7 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
     controller,
     new RegExp(`const producerWorkflowSha = "${approval.producerWorkflowSha}";`, "u"),
   );
+  assert.match(controller, /"--signer-workflow"/u);
+  assert.match(controller, /"--signer-digest"/u);
+  assert.doesNotMatch(controller, /"--signer-repo"/u);
 });
