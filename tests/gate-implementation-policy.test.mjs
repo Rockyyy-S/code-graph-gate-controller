@@ -38,7 +38,10 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   const baseline = await computeGateImplementationDigest(
     fixture.root,
     fixture.registry,
-    ["scripts/check.mjs"],
+    {
+      protectedDirectories: [],
+      protectedPaths: ["scripts/check.mjs"],
+    },
   );
 
   await writeFile(
@@ -48,7 +51,10 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   const scriptDrift = await computeGateImplementationDigest(
     fixture.root,
     fixture.registry,
-    ["scripts/check.mjs"],
+    {
+      protectedDirectories: [],
+      protectedPaths: ["scripts/check.mjs"],
+    },
   );
   assert.notEqual(scriptDrift.digest, baseline.digest);
 
@@ -60,7 +66,10 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   const checkerDrift = await computeGateImplementationDigest(
     fixture.root,
     fixture.registry,
-    ["scripts/check.mjs"],
+    {
+      protectedDirectories: [],
+      protectedPaths: ["scripts/check.mjs"],
+    },
   );
   assert.notEqual(checkerDrift.digest, baseline.digest);
 
@@ -76,7 +85,27 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   const toolchainDrift = await computeGateImplementationDigest(
     fixture.root,
     fixture.registry,
-    ["scripts/check.mjs"],
+    {
+      protectedDirectories: [],
+      protectedPaths: ["scripts/check.mjs"],
+    },
   );
   assert.notEqual(toolchainDrift.digest, baseline.digest);
+});
+
+test("受保护目录整体绑定传递 helper", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  await writeFile(path.join(fixture.root, "scripts", "helper.mjs"), "export const ok = true;\n");
+  const baseline = await computeGateImplementationDigest(fixture.root, fixture.registry, {
+    protectedDirectories: ["scripts"],
+    protectedPaths: [],
+  });
+
+  await writeFile(path.join(fixture.root, "scripts", "helper.mjs"), "export const ok = false;\n");
+  const helperDrift = await computeGateImplementationDigest(fixture.root, fixture.registry, {
+    protectedDirectories: ["scripts"],
+    protectedPaths: [],
+  });
+  assert.notEqual(helperDrift.digest, baseline.digest);
 });
