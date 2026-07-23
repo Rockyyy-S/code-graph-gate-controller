@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
+const trustedHarnessSha = "caf2de1b562e4bd22aadb714d917ac18c6ce9ba7";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
@@ -10,6 +11,16 @@ test("reusable producer 显式接收并绑定外部 workflow commit SHA", async 
   assert.match(workflow, /producer_workflow_sha:\s*\n\s+required: true\s*\n\s+type: string/u);
   assert.match(workflow, /--workflow-sha "\$\{\{ inputs\.producer_workflow_sha \}\}"/u);
   assert.doesNotMatch(workflow, /github\.workflow_sha/u);
+});
+
+test("reusable producer 固定检出已批准的不可变 GateHarness", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const checkoutBlock = /- name: Checkout immutable GateHarness[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+
+  assert.equal(typeof checkoutBlock, "string");
+  assert.match(checkoutBlock, /path: trusted-harness/u);
+  assert.match(checkoutBlock, new RegExp(`ref: ${trustedHarnessSha}`, "u"));
+  assert.doesNotMatch(checkoutBlock, /ref:\s+(?:main|master|HEAD)\b/u);
 });
 
 test("Controller attestation policy 与已批准 producer SHA 保持一致", async () => {
