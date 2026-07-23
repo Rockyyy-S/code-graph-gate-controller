@@ -4,6 +4,7 @@ import test from "node:test";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const trustedHarnessSha = "ee39f2af09a1070eb1b1cd52072c70fa0ec70a43";
+const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
@@ -41,17 +42,31 @@ test("候选执行 job 不持有 OIDC/attestation 权限，签名在干净 runne
 
 test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", async () => {
   const workflow = await readFile(workflowPath, "utf8");
+  const pnpmInstallOffset = workflow.indexOf("- name: Install checksum-pinned pnpm release");
+  const firstCheckoutOffset = workflow.indexOf("- name: Checkout immutable GateHarness");
   const evidenceStep = /- name: Produce child gate evidence[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
   const evidenceRun = evidenceStep?.split("run: |", 2)[1];
 
+  assert.ok(pnpmInstallOffset >= 0 && pnpmInstallOffset < firstCheckoutOffset);
   assert.equal(typeof evidenceStep, "string");
   assert.equal(typeof evidenceRun, "string");
   assert.doesNotMatch(evidenceRun, /\$\{\{ inputs\./u);
-  assert.match(workflow, /dest: \$\{\{ github\.workspace \}\}\/trusted-pnpm/u);
-  assert.match(workflow, /standalone: true/u);
-  assert.match(workflow, /ACTION_PNPM_BIN: \$\{\{ steps\.pnpm-install\.outputs\.bin_dest \}\}/u);
-  assert.match(workflow, /\[\[ -f "\$source_pnpm" && -x "\$source_pnpm" \]\]/u);
+  assert.doesNotMatch(workflow, /pnpm\/action-setup@|standalone: true/u);
+  assert.match(workflow, /pnpm\/pnpm\/releases\/download\/v11\.12\.0\/pnpm-linux-x64\.tar\.gz/u);
+  assert.match(workflow, new RegExp(`PNPM_ARCHIVE_SHA256: ${pnpmArchiveSha256}`, "u"));
+  assert.match(workflow, /--proto '=https' --proto-redir '=https' --tlsv1\.2/u);
+  assert.match(workflow, /sha256sum --check --strict/u);
+  assert.match(workflow, /mktemp -d "\$RUNNER_TEMP\/pnpm-11\.12\.0\.XXXXXX"/u);
+  assert.match(workflow, /tar --extract --gzip --file "\$archive"[\s\S]*-- pnpm dist/u);
+  assert.match(workflow, /source_pnpm="\$\(realpath -- "\$staging\/pnpm"\)"/u);
+  assert.match(workflow, /source_dist="\$\(realpath -- "\$staging\/dist"\)"/u);
+  assert.match(workflow, /find "\$staging_root" -type l -print0/u);
+  assert.match(workflow, /cp -a -- "\$source_dist" \/opt\/trusted-pnpm\/bin\/dist/u);
   assert.match(workflow, /install -o 0 -g 0 -m 0755 "\$source_pnpm" \/opt\/trusted-pnpm\/bin\/pnpm/u);
+  assert.match(workflow, /chown -R 0:0 \/opt\/trusted-pnpm/u);
+  assert.match(workflow, /chmod -R u\+rwX,go\+rX,go-w \/opt\/trusted-pnpm/u);
+  assert.match(workflow, /stat -c '%U:%G %a' \/opt\/trusted-pnpm\/bin\/pnpm/u);
+  assert.match(workflow, /find \/opt\/trusted-pnpm -perm \/022 -print -quit/u);
   assert.match(workflow, /sudo -u gatecandidate env -i PATH=\/opt\/trusted-pnpm\/bin/u);
   assert.match(workflow, /\[\[ "\$pnpm_version" == "11\.12\.0" \]\]/u);
   assert.match(workflow, /TRUSTED_PNPM_BIN: \/opt\/trusted-pnpm\/bin/u);
