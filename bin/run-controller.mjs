@@ -8,6 +8,7 @@ import {
 } from "../lib/attestation-policy.mjs";
 import { evaluateControllerCandidate } from "../lib/controller-policy.mjs";
 import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
+import { validateTrustedRegistryApproval } from "../lib/registry.mjs";
 
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
@@ -22,6 +23,14 @@ if (!/^[1-9][0-9]*$/u.test(controllerAppId ?? "") || !controllerRepositoryToken)
 
 await assertFreshDriftMonitor();
 const trustedRecord = JSON.parse(await readFile("trusted/registry.json", "utf8"));
+const trustedApproval = JSON.parse(
+  await readFile("trusted/registry-approval.json", "utf8"),
+);
+validateTrustedRegistryApproval({
+  approval: trustedApproval,
+  expectedProducerWorkflowSha: producerWorkflowSha,
+  record: trustedRecord,
+});
 const pulls = await githubJson(`repos/${targetRepository}/pulls?state=open&per_page=100`);
 for (const pull of pulls) {
   await processPullRequest(pull, trustedRecord);

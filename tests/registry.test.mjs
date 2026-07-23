@@ -5,6 +5,7 @@ import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
   parseEvidenceProducerId,
   validateRegistry,
+  validateTrustedRegistryApproval,
   validateTrustedRegistryRecord,
 } from "../lib/registry.mjs";
 
@@ -75,4 +76,39 @@ test("可信 registry sequence=2 绑定批准证据、候选提交和新 produce
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
   assert.equal(approval.producerWorkflowSha, "3a0b53163e91bf14d4a3d1e911292b267e1e968a");
+  assert.doesNotThrow(() =>
+    validateTrustedRegistryApproval({
+      approval,
+      expectedProducerWorkflowSha: approval.producerWorkflowSha,
+      record,
+    }),
+  );
+});
+
+test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移", async () => {
+  const approval = JSON.parse(
+    await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
+  );
+  const record = JSON.parse(
+    await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
+  );
+  const mutations = [
+    (value) => (value.sequence = 1),
+    (value) => (value.sourceCommit = "f".repeat(40)),
+    (value) => (value.gateRegistryDigest = "f".repeat(64)),
+    (value) => (value.producerWorkflowSha = "f".repeat(40)),
+  ];
+  for (const mutate of mutations) {
+    const drifted = structuredClone(approval);
+    mutate(drifted);
+    assert.throws(
+      () =>
+        validateTrustedRegistryApproval({
+          approval: drifted,
+          expectedProducerWorkflowSha: approval.producerWorkflowSha,
+          record,
+        }),
+      /TrustedGateRegistryApprovalV1/u,
+    );
+  }
 });
