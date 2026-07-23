@@ -7,6 +7,7 @@ import {
 } from "../lib/controller-policy.mjs";
 
 const workflowSha = "1".repeat(40);
+const gateImplementationDigest = "f".repeat(64);
 
 /** 创建 registry/context/evidence 摘要闭合的 Controller 测试 fixture。 */
 function createFixture() {
@@ -60,6 +61,7 @@ function createFixture() {
       affectedPaths: ["src/index.ts"],
       evaluationContext,
       evidence: [evidence],
+      gateImplementationDigest,
       gateRegistryDigest,
       schemaVersion: 1,
     },
@@ -72,10 +74,11 @@ function createFixture() {
     trustedRecord: {
       approvalEvidenceDigest: "d".repeat(64),
       effectiveAt: "2026-07-23T00:00:00Z",
+      gateImplementationDigest,
       gateRegistryDigest,
       providerRepositoryId: "1303415307",
       schemaVersion: 1,
-      sequence: 1,
+      sequence: 3,
       sourceCommit: "e".repeat(40),
     },
   };
@@ -87,6 +90,16 @@ test("Controller 接受完整绑定的 pass evidence", () => {
   assert.equal(result.status, "accepted");
   assert.equal(result.conclusion, "success");
   assert.match(result.casKey, /^1303415307:b{40}:/);
+});
+
+test("Controller 拒绝 artifact 未知字段和未批准实现摘要", () => {
+  const unknownField = createFixture();
+  unknownField.artifact.untrusted = true;
+  assert.equal(evaluateControllerCandidate(unknownField).status, "invalid");
+
+  const implementationDrift = createFixture();
+  implementationDrift.artifact.gateImplementationDigest = "0".repeat(64);
+  assert.equal(evaluateControllerCandidate(implementationDrift).status, "invalid");
 });
 
 test("相同 digest 重放幂等，冲突 digest invalid", () => {

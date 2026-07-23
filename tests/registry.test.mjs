@@ -56,6 +56,49 @@ test("registry 对摘要漂移、未知字段和非法 trigger fail closed", () 
 
   const invalidTrigger = createRegistry({ triggerPaths: [] });
   assert.throws(() => validateRegistry(invalidTrigger), /triggerPaths/u);
+
+  const duplicateCheckId = createRegistry();
+  const secondDefinition = {
+    ...duplicateCheckId.gates[0].gateDefinition,
+    evidenceProducerId: duplicateCheckId.gates[0].gateDefinition.evidenceProducerId.replace(
+      /#type$/u,
+      "#unit",
+    ),
+    gateId: "unit",
+  };
+  duplicateCheckId.gates.push({
+    gateDefinition: secondDefinition,
+    gateDefinitionDigest: sha256CanonicalJson(secondDefinition),
+  });
+  assert.throws(() => validateRegistry(duplicateCheckId), /checkId/u);
+});
+
+test("sequence=3 可信记录绑定 gate 实现摘要", () => {
+  assert.doesNotThrow(() =>
+    validateTrustedRegistryRecord({
+      approvalEvidenceDigest: "a".repeat(64),
+      effectiveAt: "2026-07-23T00:00:00Z",
+      gateImplementationDigest: "b".repeat(64),
+      gateRegistryDigest: "c".repeat(64),
+      providerRepositoryId: "1303415307",
+      schemaVersion: 1,
+      sequence: 3,
+      sourceCommit: "d".repeat(40),
+    }),
+  );
+  assert.throws(
+    () =>
+      validateTrustedRegistryRecord({
+        approvalEvidenceDigest: "a".repeat(64),
+        effectiveAt: "2026-07-23T00:00:00Z",
+        gateRegistryDigest: "c".repeat(64),
+        providerRepositoryId: "1303415307",
+        schemaVersion: 1,
+        sequence: 3,
+        sourceCommit: "d".repeat(40),
+      }),
+    /TrustedGateRegistryRecordV1/u,
+  );
 });
 
 test("可信 registry sequence=2 绑定批准证据、候选提交和新 producer", async () => {
