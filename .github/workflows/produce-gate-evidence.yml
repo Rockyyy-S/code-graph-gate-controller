@@ -172,8 +172,7 @@ jobs:
           sudo cp -a -- "$source_candidate/." "$candidate_root/"
           sudo chown -R 20001:20001 "$candidate_root"
           [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
-          cd -- "$candidate_root"
-          sudo -u gatecandidate env -i \
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
             CI=true \
             HOME=/tmp/gatecandidate-install-home \
             LANG=C.UTF-8 \

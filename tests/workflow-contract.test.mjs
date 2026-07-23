@@ -76,7 +76,7 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /PATH="\$TRUSTED_PNPM_BIN:\$PATH"/u);
   assert.match(
     workflow,
-    /cd -- "\$candidate_root"[\s\S]*sudo -u gatecandidate env -i[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
+    /sudo -u gatecandidate env -i --chdir="\$candidate_root"[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
   );
   assert.match(workflow, /workspace_root="\$\(realpath -- "\$GITHUB_WORKSPACE"\)"/u);
   assert.match(workflow, /source_candidate="\$\(realpath -- candidate\)"/u);
