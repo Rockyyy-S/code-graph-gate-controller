@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
-const trustedHarnessSha = "ef06f980ffef80c88794b234b733076050d2ce31";
+const trustedHarnessSha = "ee39f2af09a1070eb1b1cd52072c70fa0ec70a43";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
