@@ -14,7 +14,7 @@ function createFixture() {
     },
     rulesets: [
       {
-        bypass_actors: [],
+        bypassActorCount: 0,
         conditions: {
           ref_name: { exclude: [], include: ["refs/heads/main"] },
         },
@@ -45,7 +45,7 @@ test("ruleset、App identity、bypass、branch 或 repository 漂移均 invalid"
   const mutations = [
     (fixture) => (fixture.repository.id = 1),
     (fixture) => (fixture.repository.default_branch = "develop"),
-    (fixture) => fixture.rulesets[0].bypass_actors.push({ actor_id: 1 }),
+    (fixture) => (fixture.rulesets[0].bypassActorCount = 1),
     (fixture) => (fixture.rulesets[0].enforcement = "disabled"),
     (fixture) =>
       (fixture.rulesets[0].rules[0].parameters.required_status_checks[0].integration_id = 999),
