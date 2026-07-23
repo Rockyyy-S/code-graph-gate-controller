@@ -141,7 +141,10 @@ jobs:
           [[ "$(stat -c '%U:%G %a' /opt/trusted-pnpm/bin/pnpm)" == "root:root 755" ]]
           [[ "$(stat -c '%U:%G' /opt/trusted-pnpm/bin/dist/pnpm.mjs)" == "root:root" ]]
           [[ -z "$(find /opt/trusted-pnpm -perm /022 -print -quit)" ]]
-          pnpm_version="$(sudo -u gatecandidate env -i PATH=/opt/trusted-pnpm/bin /opt/trusted-pnpm/bin/pnpm --version)"
+          pnpm_version="$(sudo -u gatecandidate --chdir=/tmp/gatecandidate-install-home env -i \
+            HOME=/tmp/gatecandidate-install-home \
+            PATH=/opt/trusted-pnpm/bin \
+            /opt/trusted-pnpm/bin/pnpm --version)"
           [[ "$pnpm_version" == "11.12.0" ]]
 
       - name: Install frozen dependencies without candidate lifecycle
@@ -154,8 +157,9 @@ jobs:
             sudo rm -rf -- /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
           }
           trap cleanup_install_identity EXIT
-          sudo chown -R 20001:20001 candidate
-          sudo -u gatecandidate env -i \
+          candidate_root="$(realpath -- candidate)"
+          sudo chown -R 20001:20001 "$candidate_root"
+          sudo -u gatecandidate --chdir="$candidate_root" env -i \
             CI=true \
             HOME=/tmp/gatecandidate-install-home \
             LANG=C.UTF-8 \
@@ -164,12 +168,12 @@ jobs:
             XDG_CACHE_HOME=/tmp/gatecandidate-install-home/.cache \
             XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
             XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
-            pnpm --dir candidate install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
+            pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
           cleanup_install_identity
           trap - EXIT
           sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
-          sudo chown -R "$(id -u):$(id -g)" candidate
-          sudo chmod -R go-w candidate
+          sudo chown -R "$(id -u):$(id -g)" "$candidate_root"
+          sudo chmod -R go-w "$candidate_root"
 
       - name: Grant candidate writes only to generated output directories
         shell: bash
