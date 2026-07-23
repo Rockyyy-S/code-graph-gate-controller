@@ -115,3 +115,42 @@ test("受保护目录整体绑定传递 helper", async (context) => {
   });
   assert.notEqual(helperDrift.digest, baseline.digest);
 });
+
+test("被忽略的本地生成目录不污染 clean checkout 实现摘要", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  await mkdir(path.join(fixture.root, "scripts", "generated"), { recursive: true });
+  await writeFile(
+    path.join(fixture.root, "scripts", "generated", "cache.json"),
+    "first\n",
+  );
+  const policy = {
+    excludedDirectories: ["scripts/generated"],
+    protectedDirectories: ["scripts"],
+    optionalProtectedPaths: [],
+    protectedPaths: [],
+  };
+  const baseline = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+
+  await writeFile(
+    path.join(fixture.root, "scripts", "generated", "cache.json"),
+    "second\n",
+  );
+  const changedCache = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+
+  assert.equal(changedCache.digest, baseline.digest);
+  assert.equal(
+    changedCache.projection.files.some(({ path: relativePath }) =>
+      relativePath.startsWith("scripts/generated/"),
+    ),
+    false,
+  );
+});
