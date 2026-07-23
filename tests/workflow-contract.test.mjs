@@ -67,16 +67,14 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /chmod -R u\+rwX,go\+rX,go-w \/opt\/trusted-pnpm/u);
   assert.match(workflow, /stat -c '%U:%G %a' \/opt\/trusted-pnpm\/bin\/pnpm/u);
   assert.match(workflow, /find \/opt\/trusted-pnpm -perm \/022 -print -quit/u);
-  assert.match(
-    workflow,
-    /sudo -u gatecandidate --chdir=\/tmp\/gatecandidate-install-home env -i/u,
-  );
+  assert.match(workflow, /cd -- \/tmp\/gatecandidate-install-home/u);
+  assert.match(workflow, /sudo -u gatecandidate env -i/u);
   assert.match(workflow, /\[\[ "\$pnpm_version" == "11\.12\.0" \]\]/u);
   assert.match(workflow, /TRUSTED_PNPM_BIN: \/opt\/trusted-pnpm\/bin/u);
   assert.match(workflow, /PATH="\$TRUSTED_PNPM_BIN:\$PATH"/u);
   assert.match(
     workflow,
-    /sudo -u gatecandidate --chdir="\$candidate_root" env -i[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
+    /cd -- "\$candidate_root"[\s\S]*sudo -u gatecandidate env -i[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
   );
   assert.match(workflow, /sudo pkill -KILL -u 20001 \|\| true/u);
   assert.match(workflow, /gatecandidate-install-home/u);
@@ -84,7 +82,7 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /candidate_root="\$\(realpath -- candidate\)"/u);
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
-  assert.match(workflow, /sudo -u gatecandidate --chdir=/u);
+  assert.doesNotMatch(workflow, /sudo[^\n]*(?:--chdir|-D\b)/u);
   assert.match(workflow, /sudo env -i HOME=/u);
   assert.match(workflow, /sudo chmod -R go-w "\$candidate_root"/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);

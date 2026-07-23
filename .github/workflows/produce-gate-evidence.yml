@@ -141,7 +141,8 @@ jobs:
           [[ "$(stat -c '%U:%G %a' /opt/trusted-pnpm/bin/pnpm)" == "root:root 755" ]]
           [[ "$(stat -c '%U:%G' /opt/trusted-pnpm/bin/dist/pnpm.mjs)" == "root:root" ]]
           [[ -z "$(find /opt/trusted-pnpm -perm /022 -print -quit)" ]]
-          pnpm_version="$(sudo -u gatecandidate --chdir=/tmp/gatecandidate-install-home env -i \
+          cd -- /tmp/gatecandidate-install-home
+          pnpm_version="$(sudo -u gatecandidate env -i \
             HOME=/tmp/gatecandidate-install-home \
             PATH=/opt/trusted-pnpm/bin \
             /opt/trusted-pnpm/bin/pnpm --version)"
@@ -159,7 +160,8 @@ jobs:
           trap cleanup_install_identity EXIT
           candidate_root="$(realpath -- candidate)"
           sudo chown -R 20001:20001 "$candidate_root"
-          sudo -u gatecandidate --chdir="$candidate_root" env -i \
+          cd -- "$candidate_root"
+          sudo -u gatecandidate env -i \
             CI=true \
             HOME=/tmp/gatecandidate-install-home \
             LANG=C.UTF-8 \
