@@ -8,7 +8,10 @@ import {
   didRequiredBlockingGatesPass,
   evaluateApplicability,
 } from "../lib/harness.mjs";
-import { parseNameStatusZ } from "../lib/git-context.mjs";
+import {
+  createTrustedGitArguments,
+  parseNameStatusZ,
+} from "../lib/git-context.mjs";
 
 test("triggerPaths 缺失时 always applicable", () => {
   assert.equal(evaluateApplicability({ gateId: "type" }, []), "required");
@@ -90,4 +93,14 @@ test("每个 gate 使用独立 HOME 与 TMP 路径", () => {
       gateTempDirectory: path.join("/tmp/gate-tmp", "unit"),
     },
   );
+});
+
+test("root Harness 只信任当前候选 Git 路径", () => {
+  assert.deepEqual(createTrustedGitArguments("/workspace/candidate", ["status"]), [
+    "-c",
+    "safe.directory=/workspace/candidate",
+    "-C",
+    "/workspace/candidate",
+    "status",
+  ]);
 });
