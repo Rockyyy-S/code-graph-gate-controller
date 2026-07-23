@@ -97,6 +97,33 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   assert.notEqual(toolchainDrift.digest, baseline.digest);
 });
 
+test("受保护文本的 CRLF 与 LF 产生相同实现摘要", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  const policy = {
+    protectedDirectories: [],
+    optionalProtectedPaths: [],
+    protectedPaths: ["scripts/check.mjs"],
+  };
+  const baseline = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+
+  await writeFile(
+    path.join(fixture.root, "scripts", "check.mjs"),
+    "process.exitCode = 0;\r\n",
+  );
+  const windowsCheckout = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+
+  assert.equal(windowsCheckout.digest, baseline.digest);
+});
+
 test("受保护目录整体绑定传递 helper", async (context) => {
   const fixture = await createFixture();
   context.after(() => rm(fixture.root, { force: true, recursive: true }));
