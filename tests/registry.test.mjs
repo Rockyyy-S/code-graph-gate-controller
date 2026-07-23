@@ -105,7 +105,7 @@ test("sequence=3 可信记录绑定 gate 实现摘要", () => {
   );
 });
 
-test("可信 registry sequence=2 绑定批准证据、候选提交和新 producer", async () => {
+test("可信 registry sequence=3 绑定批准证据、候选提交、实现摘要和新 producer", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -123,15 +123,19 @@ test("可信 registry sequence=2 绑定批准证据、候选提交和新 produce
   );
 
   validateTrustedRegistryRecord(record);
-  assert.equal(record.sequence, 2);
-  assert.equal(record.sourceCommit, "d54be3b34eddc55c3e7f65dafe8682718290904a");
+  assert.equal(record.sequence, 3);
+  assert.equal(record.sourceCommit, "d336d3bbb245ab7bc0112099190a0e6277285f32");
+  assert.equal(
+    record.gateImplementationDigest,
+    "3294b01cbe2d0190bc94b275f8bcb4ba3c3bb69ec26e3143131d00c4625ec4b2",
+  );
   assert.equal(
     record.gateRegistryDigest,
-    "d1b9e3c2529514dfbe4a058ed4d17f86d4e24e05951a4391ddf09161eb113378",
+    "0a4937d97bbaaf8288af350fd4f67b1ee9f68d7b00392dcacc9413279f2bf155",
   );
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
-  assert.equal(approval.producerWorkflowSha, "3a0b53163e91bf14d4a3d1e911292b267e1e968a");
+  assert.equal(approval.producerWorkflowSha, "4d3650e1698afe83dbb347a3f9115dcc40b6d352");
   assert.doesNotThrow(() =>
     validateTrustedRegistryApproval({
       approval,
