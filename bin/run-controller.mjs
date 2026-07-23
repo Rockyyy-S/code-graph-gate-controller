@@ -8,7 +8,7 @@ import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
 const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
-const producerWorkflowSha = "616633c1e594174e4964672f1d04e94718995940";
+const producerWorkflowSha = "3a0b53163e91bf14d4a3d1e911292b267e1e968a";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
 
