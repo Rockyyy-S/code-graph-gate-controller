@@ -2,8 +2,11 @@ name: architecture-gate-controller
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "4-59/5 * * * *"
   workflow_dispatch:
+  workflow_run:
+    workflows: ["architecture-drift-monitor"]
+    types: [completed]
 
 permissions:
   actions: read

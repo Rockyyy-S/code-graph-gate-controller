@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
-const trustedHarnessSha = "ee39f2af09a1070eb1b1cd52072c70fa0ec70a43";
+const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
+const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
+const trustedHarnessSha = "61dc5455c2140b594410be40fbbccd4dcf9d57fa";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
@@ -126,4 +128,16 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
   assert.match(controller, /"--signer-workflow"/u);
   assert.match(controller, /"--signer-digest"/u);
   assert.doesNotMatch(controller, /"--signer-repo"/u);
+});
+
+test("monitor 完成事件直接触发 Controller，定时兜底按顺序错开", async () => {
+  const controllerWorkflow = await readFile(controllerWorkflowPath, "utf8");
+  const monitorWorkflow = await readFile(monitorWorkflowPath, "utf8");
+
+  assert.match(monitorWorkflow, /cron: "2-59\/5 \* \* \* \*"/u);
+  assert.match(controllerWorkflow, /cron: "4-59\/5 \* \* \* \*"/u);
+  assert.match(
+    controllerWorkflow,
+    /workflow_run:\s*\n\s+workflows: \["architecture-drift-monitor"\]\s*\n\s+types: \[completed\]/u,
+  );
 });
