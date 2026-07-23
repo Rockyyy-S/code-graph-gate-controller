@@ -33,6 +33,23 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Validate fixed provider inputs
+        env:
+          BASE_OID: ${{ inputs.base_oid }}
+          HEAD_OID: ${{ inputs.head_oid }}
+          OBJECT_FORMAT: ${{ inputs.object_format }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
+          PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
+          REPOSITORY: ${{ inputs.repository }}
+        shell: bash
+        run: |
+          [[ "$BASE_OID" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$HEAD_OID" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$OBJECT_FORMAT" == "sha1" ]]
+          [[ "$PRODUCER_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROVIDER_REPOSITORY_ID" == "1303415307" ]]
+          [[ "$REPOSITORY" == "Rockyyy-S/code-graph" ]]
+
       - name: Checkout immutable GateHarness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
         with:
@@ -61,8 +78,10 @@ jobs:
           repository: ${{ inputs.repository }}
 
       - name: Install pnpm
+        id: pnpm-install
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # 固定 v4 提交
         with:
+          dest: ${{ github.workspace }}/trusted-pnpm
           run_install: false
           version: 11.12.0
 
@@ -76,29 +95,55 @@ jobs:
         run: |
           sudo groupadd --gid 20001 gatecandidate
           sudo useradd --uid 20001 --gid 20001 --home-dir /tmp/gatecandidate-home --no-create-home --shell /usr/sbin/nologin gatecandidate
-          sudo install -d -o 20001 -g 20001 -m 0700 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
+          sudo install -d -o 20001 -g 20001 -m 0700 /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
           install -d -m 0700 artifacts trusted-harness-home
 
-      - name: Install frozen dependencies without candidate lifecycle
+      - name: Harden trusted pnpm for isolated execution
+        env:
+          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
         shell: bash
         run: |
+          case "$TRUSTED_PNPM_BIN" in
+            "$GITHUB_WORKSPACE"/trusted-pnpm/*) ;;
+            *)
+              echo "pnpm bin 未位于可信工作区目录。" >&2
+              exit 1
+              ;;
+          esac
+          chmod -R u+rwX,go+rX,go-w "$GITHUB_WORKSPACE/trusted-pnpm"
+          sudo -u gatecandidate test -x "$TRUSTED_PNPM_BIN/pnpm"
+
+      - name: Install frozen dependencies without candidate lifecycle
+        env:
+          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
+        shell: bash
+        run: |
+          cleanup_install_identity() {
+            sudo pkill -KILL -u 20001 || true
+            sudo rm -rf -- /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
+          }
+          trap cleanup_install_identity EXIT
           sudo chown -R 20001:20001 candidate
           sudo -u gatecandidate env -i \
             CI=true \
-            HOME=/tmp/gatecandidate-home \
+            HOME=/tmp/gatecandidate-install-home \
             LANG=C.UTF-8 \
-            PATH="$PATH" \
-            TMPDIR=/tmp/gatecandidate-tmp \
-            XDG_CACHE_HOME=/tmp/gatecandidate-home/.cache \
-            XDG_CONFIG_HOME=/tmp/gatecandidate-home/.config \
-            XDG_DATA_HOME=/tmp/gatecandidate-home/.local/share \
-            pnpm --dir candidate install --frozen-lockfile --ignore-scripts
+            PATH="$TRUSTED_PNPM_BIN:$PATH" \
+            TMPDIR=/tmp/gatecandidate-install-tmp \
+            XDG_CACHE_HOME=/tmp/gatecandidate-install-home/.cache \
+            XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
+            XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
+            pnpm --dir candidate install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
+          cleanup_install_identity
+          trap - EXIT
+          sudo install -d -o 20001 -g 20001 -m 0700 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
           sudo chown -R "$(id -u):$(id -g)" candidate
           sudo chmod -R go-w candidate
 
       - name: Grant candidate writes only to generated output directories
         shell: bash
         run: |
+          candidate_root="$(realpath -- candidate)"
           outputs=(
             apps/cli/dist
             apps/extension/dist
@@ -114,9 +159,10 @@ jobs:
             node_modules/.vite
           )
           for relative_path in "${outputs[@]}"; do
-            output_path="candidate/$relative_path"
-            if [[ -L "$output_path" ]]; then
-              echo "拒绝符号链接输出目录：$relative_path" >&2
+            output_path="$candidate_root/$relative_path"
+            resolved_output="$(realpath -m -- "$output_path")"
+            if [[ "$resolved_output" != "$output_path" ]]; then
+              echo "拒绝包含符号链接祖先的输出目录：$relative_path" >&2
               exit 1
             fi
             sudo install -d -o 20001 -g 20001 -m 0700 "$output_path"
@@ -125,23 +171,30 @@ jobs:
           done
 
       - name: Produce child gate evidence
+        env:
+          BASE_OID: ${{ inputs.base_oid }}
+          HEAD_OID: ${{ inputs.head_oid }}
+          OBJECT_FORMAT: ${{ inputs.object_format }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
+          PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
+          TRUSTED_PNPM_BIN: ${{ steps.pnpm-install.outputs.bin_dest }}
         shell: bash
         run: |
-          env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
+          env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
             --artifact-directory artifacts \
-            --base-oid "${{ inputs.base_oid }}" \
+            --base-oid "$BASE_OID" \
             --candidate-root candidate \
             --controller-repository Rockyyy-S/code-graph-gate-controller \
             --gate-gid 20001 \
             --gate-home /tmp/gatecandidate-home \
             --gate-temp-directory /tmp/gatecandidate-tmp \
             --gate-uid 20001 \
-            --head-oid "${{ inputs.head_oid }}" \
-            --object-format "${{ inputs.object_format }}" \
-            --provider-repository-id "${{ inputs.provider_repository_id }}" \
+            --head-oid "$HEAD_OID" \
+            --object-format "$OBJECT_FORMAT" \
+            --provider-repository-id "$PROVIDER_REPOSITORY_ID" \
             --trusted-record trusted-state/trusted/registry.json \
             --workflow-file produce-gate-evidence.yml \
-            --workflow-sha "${{ inputs.producer_workflow_sha }}"
+            --workflow-sha "$PRODUCER_WORKFLOW_SHA"
 
       - name: Upload unsigned evidence from isolated execution job
         if: ${{ always() && hashFiles('artifacts/**') != '' }}

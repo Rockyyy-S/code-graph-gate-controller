@@ -9,7 +9,8 @@ test("reusable producer 显式接收并绑定外部 workflow commit SHA", async 
   const workflow = await readFile(workflowPath, "utf8");
 
   assert.match(workflow, /producer_workflow_sha:\s*\n\s+required: true\s*\n\s+type: string/u);
-  assert.match(workflow, /--workflow-sha "\$\{\{ inputs\.producer_workflow_sha \}\}"/u);
+  assert.match(workflow, /PRODUCER_WORKFLOW_SHA: \$\{\{ inputs\.producer_workflow_sha \}\}/u);
+  assert.match(workflow, /--workflow-sha "\$PRODUCER_WORKFLOW_SHA"/u);
   assert.doesNotMatch(workflow, /github\.workflow_sha/u);
 });
 
@@ -40,8 +41,26 @@ test("候选执行 job 不持有 OIDC/attestation 权限，签名在干净 runne
 
 test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", async () => {
   const workflow = await readFile(workflowPath, "utf8");
+  const evidenceStep = /- name: Produce child gate evidence[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+  const evidenceRun = evidenceStep?.split("run: |", 2)[1];
 
-  assert.match(workflow, /pnpm --dir candidate install --frozen-lockfile --ignore-scripts/u);
+  assert.equal(typeof evidenceStep, "string");
+  assert.equal(typeof evidenceRun, "string");
+  assert.doesNotMatch(evidenceRun, /\$\{\{ inputs\./u);
+  assert.match(workflow, /dest: \$\{\{ github\.workspace \}\}\/trusted-pnpm/u);
+  assert.match(workflow, /TRUSTED_PNPM_BIN: \$\{\{ steps\.pnpm-install\.outputs\.bin_dest \}\}/u);
+  assert.match(workflow, /chmod -R u\+rwX,go\+rX,go-w "\$GITHUB_WORKSPACE\/trusted-pnpm"/u);
+  assert.match(workflow, /sudo -u gatecandidate test -x "\$TRUSTED_PNPM_BIN\/pnpm"/u);
+  assert.match(workflow, /PATH="\$TRUSTED_PNPM_BIN:\$PATH"/u);
+  assert.match(
+    workflow,
+    /pnpm --dir candidate install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
+  );
+  assert.match(workflow, /sudo pkill -KILL -u 20001 \|\| true/u);
+  assert.match(workflow, /gatecandidate-install-home/u);
+  assert.match(workflow, /candidate_root="\$\(realpath -- candidate\)"/u);
+  assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
+  assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.match(workflow, /sudo -u gatecandidate env -i/u);
   assert.match(workflow, /sudo chmod -R go-w candidate/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);

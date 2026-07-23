@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createGateEnvironment,
+  createTrustedGateArguments,
   didRequiredBlockingGatesPass,
   evaluateApplicability,
 } from "../lib/harness.mjs";
@@ -47,4 +49,27 @@ test("non-blocking gate 失败不改变 required blocking 结论", () => {
     didRequiredBlockingGatesPass(evidence, new Set(["required", "advisory"])),
     false,
   );
+});
+
+test("pnpm gate 禁止执行未绑定的 pre/post lifecycle", () => {
+  assert.deepEqual(createTrustedGateArguments("pnpm", ["unit"]), [
+    "--config.enable-pre-post-scripts=false",
+    "--config.ignore-pnpmfile=true",
+    "unit",
+  ]);
+  assert.deepEqual(createTrustedGateArguments("node", ["scripts/check.mjs"]), [
+    "scripts/check.mjs",
+  ]);
+});
+
+test("嵌套 pnpm 继承 hooks 禁用环境", () => {
+  const environment = createGateEnvironment({
+    gateHome: "/tmp/gate-home",
+    gateTempDirectory: "/tmp/gate-tmp",
+  });
+
+  assert.equal(environment.npm_config_enable_pre_post_scripts, "false");
+  assert.equal(environment.npm_config_ignore_pnpmfile, "true");
+  assert.equal(environment.PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS, "false");
+  assert.equal(environment.PNPM_CONFIG_IGNORE_PNPMFILE, "true");
 });
