@@ -5,7 +5,7 @@ import test from "node:test";
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "9b76436d1e7cbb7e81b348f503f481fb00c06933";
+const trustedHarnessSha = "da694bce36baf82a5e839ab72fe24139f4d0a25d";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
@@ -91,6 +91,8 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /sudo pkill -KILL -u 20001 \|\| true/u);
   assert.match(workflow, /gatecandidate-install-home/u);
   assert.match(workflow, /install -d -o 0 -g 0 -m 0711 \/tmp\/gatecandidate-home/u);
+  assert.match(workflow, /\[\[ ! -e \/g \]\]/u);
+  assert.match(workflow, /--gate-temp-directory \/g/u);
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.doesNotMatch(workflow, /sudo -u gatecandidate --chdir=|sudo -D\b/u);

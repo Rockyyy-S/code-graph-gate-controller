@@ -99,7 +99,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 9b76436d1e7cbb7e81b348f503f481fb00c06933
+          ref: da694bce36baf82a5e839ab72fe24139f4d0a25d
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -187,7 +187,8 @@ jobs:
           # 从候选 UID 无法访问的原 checkout 恢复 Git 元数据，再拒绝任何 tracked 漂移。
           sudo rm -rf -- "$candidate_root/.git"
           sudo cp -a -- "$source_candidate/.git" "$candidate_root/.git"
-          sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /tmp/gatecandidate-tmp
+          [[ ! -e /g ]]
+          sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /g
           sudo chown -R "$(id -u):20001" "$candidate_root"
           sudo chmod -R u+rwX,g+rX,o-rwx "$candidate_root"
           [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
@@ -242,7 +243,7 @@ jobs:
             --controller-repository Rockyyy-S/code-graph-gate-controller \
             --gate-gid 20001 \
             --gate-home /tmp/gatecandidate-home \
-            --gate-temp-directory /tmp/gatecandidate-tmp \
+            --gate-temp-directory /g \
             --gate-uid 20001 \
             --head-oid "$HEAD_OID" \
             --object-format "$OBJECT_FORMAT" \
@@ -265,7 +266,7 @@ jobs:
         shell: bash
         run: |
           sudo pkill -KILL -u 20001 || true
-          sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home /tmp/gatecandidate-tmp \
+          sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home /g \
             /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
 
   gate-evidence:
