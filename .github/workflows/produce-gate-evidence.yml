@@ -189,6 +189,7 @@ jobs:
           sudo cp -a -- "$source_candidate/.git" "$candidate_root/.git"
           [[ ! -e /g ]]
           sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /g
+          echo "GATE_TEMP_ROOT_CREATED=true" >> "$GITHUB_ENV"
           sudo chown -R "$(id -u):20001" "$candidate_root"
           sudo chmod -R u+rwX,g+rX,o-rwx "$candidate_root"
           [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
@@ -266,7 +267,10 @@ jobs:
         shell: bash
         run: |
           sudo pkill -KILL -u 20001 || true
-          sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home /g \
+          if [[ "${GATE_TEMP_ROOT_CREATED:-}" == "true" ]]; then
+            sudo rm -rf -- /g
+          fi
+          sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home \
             /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
 
   gate-evidence:

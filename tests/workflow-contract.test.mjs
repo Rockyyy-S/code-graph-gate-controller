@@ -92,7 +92,12 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /gatecandidate-install-home/u);
   assert.match(workflow, /install -d -o 0 -g 0 -m 0711 \/tmp\/gatecandidate-home/u);
   assert.match(workflow, /\[\[ ! -e \/g \]\]/u);
+  assert.match(workflow, /echo "GATE_TEMP_ROOT_CREATED=true" >> "\$GITHUB_ENV"/u);
   assert.match(workflow, /--gate-temp-directory \/g/u);
+  assert.match(
+    workflow,
+    /if \[\[ "\$\{GATE_TEMP_ROOT_CREATED:-\}" == "true" \]\]; then\s+sudo rm -rf -- \/g\s+fi/u,
+  );
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.doesNotMatch(workflow, /sudo -u gatecandidate --chdir=|sudo -D\b/u);
