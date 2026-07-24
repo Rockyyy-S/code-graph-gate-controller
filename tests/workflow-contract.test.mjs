@@ -5,7 +5,7 @@ import test from "node:test";
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "61dc5455c2140b594410be40fbbccd4dcf9d57fa";
+const trustedHarnessSha = "9b76436d1e7cbb7e81b348f503f481fb00c06933";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
