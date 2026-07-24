@@ -8,6 +8,10 @@ on:
     workflows: ["architecture-drift-monitor"]
     types: [completed]
 
+concurrency:
+  group: architecture-gate-controller
+  cancel-in-progress: false
+
 permissions:
   actions: read
   contents: read

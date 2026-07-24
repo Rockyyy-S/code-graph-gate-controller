@@ -137,8 +137,10 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
   assert.doesNotMatch(controller, /"--signer-repo"/u);
   assert.match(
     controller,
-    /const pulls = await githubJson[\s\S]*?try \{\s+await assertFreshDriftMonitor\(\);\s+\} catch \(error\) \{\s+await publishDriftFailureForOpenPulls\(pulls, trustedRecord, error\);\s+throw error;/u,
+    /let pulls = \[\];[\s\S]*?await assertFreshDriftMonitor\(\);[\s\S]*?pulls = await listOpenPulls\(\);[\s\S]*?listOpenPullsBestEffort\(\)[\s\S]*?publishDriftFailureForOpenPulls/u,
   );
+  assert.match(controller, /check-runs\?filter=all/u);
+  assert.match(controller, /allowFailureOnHistoryError/u);
   assert.match(
     controller,
     /status: "drift-monitor-invalid"[\s\S]*?trustedSequence: trustedRecord\.sequence/u,
@@ -154,5 +156,9 @@ test("monitor 完成事件直接触发 Controller，定时兜底按顺序错开"
   assert.match(
     controllerWorkflow,
     /workflow_run:\s*\n\s+workflows: \["architecture-drift-monitor"\]\s*\n\s+types: \[completed\]/u,
+  );
+  assert.match(
+    controllerWorkflow,
+    /concurrency:\s*\n\s+group: architecture-gate-controller\s*\n\s+cancel-in-progress: false/u,
   );
 });

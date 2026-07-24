@@ -6,13 +6,18 @@ import {
   validateProviderWorkflowRun,
   validateVerifiedAttestations,
 } from "../lib/attestation-policy.mjs";
+import { runBestEffort } from "../lib/best-effort.mjs";
 import {
   evaluateControllerCandidate,
   selectFreshDriftMonitorRun,
 } from "../lib/controller-policy.mjs";
-import { classifyCheckReplay } from "../lib/check-replay-policy.mjs";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
+import { publishControllerCheck } from "../lib/controller-check-publisher.mjs";
 import { downloadArtifact, githubJson, runTool } from "../lib/github-api.mjs";
+import {
+  collectGithubPages,
+  collectGithubPagesBestEffort,
+} from "../lib/github-pagination.mjs";
 import { validateTrustedRegistryApproval } from "../lib/registry.mjs";
 
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
@@ -21,6 +26,17 @@ const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
 const producerWorkflowSha = "48a9ee8b1034f4b656a209bc6f1138dcd3755311";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
+
+/** 标记必须撤销旧成功并令 workflow 失败的 monitor 无效状态。 */
+class DriftMonitorInvalidError extends Error {
+  constructor(cause) {
+    super(
+      cause instanceof Error ? cause.message : "drift monitor 状态不可验证。",
+      { cause },
+    );
+    this.name = "DriftMonitorInvalidError";
+  }
+}
 
 if (!/^[1-9][0-9]*$/u.test(controllerAppId ?? "") || !controllerRepositoryToken) {
   throw new Error("Controller App identity 或 controller repository token 缺失。\n");
@@ -43,24 +59,86 @@ validateTrustedRegistryApproval({
   previousRecord: previousTrustedRecord,
   record: trustedRecord,
 });
-const pulls = await githubJson(`repos/${targetRepository}/pulls?state=open&per_page=100`);
+let pulls = [];
 try {
   await assertFreshDriftMonitor();
-} catch (error) {
-  await publishDriftFailureForOpenPulls(pulls, trustedRecord, error);
+  pulls = await listOpenPulls();
+  for (const pull of pulls) {
+    await processPullRequest(pull, trustedRecord);
+  }
+} catch (caughtError) {
+  let error = caughtError;
+  const revocationFailures = [];
+  if (!(error instanceof DriftMonitorInvalidError)) {
+    try {
+      await assertFreshDriftMonitor();
+    } catch (monitorError) {
+      error = monitorError;
+      revocationFailures.push(caughtError);
+    }
+    if (!(error instanceof DriftMonitorInvalidError)) {
+      throw error;
+    }
+  }
+  const refreshed = await listOpenPullsBestEffort();
+  if (refreshed.error !== null) {
+    revocationFailures.push(refreshed.error);
+  }
+  const revocationPulls = mergePullSnapshots(pulls, refreshed.values);
+  revocationFailures.push(...await publishDriftFailureForOpenPulls(
+    revocationPulls,
+    trustedRecord,
+    error,
+  ));
+  if (revocationFailures.length > 0) {
+    throw new AggregateError(
+      [error, ...revocationFailures],
+      `drift monitor 无效，且撤销过程发生 ${revocationFailures.length} 个错误。`,
+    );
+  }
   throw error;
 }
-for (const pull of pulls) {
-  await processPullRequest(pull, trustedRecord);
+
+/** 完整读取当前全部开放 PR；分页不完整时拒绝继续发布正常结论。 */
+async function listOpenPulls() {
+  return collectGithubPages({
+    endpoint: `repos/${targetRepository}/pulls?state=open`,
+    field: null,
+    request: githubJson,
+  });
+}
+
+/** drift 撤销路径保留已成功读取的 PR，即使后续分页 API 失败。 */
+async function listOpenPullsBestEffort() {
+  return collectGithubPagesBestEffort({
+    endpoint: `repos/${targetRepository}/pulls?state=open`,
+    field: null,
+    request: githubJson,
+  });
+}
+
+/** 合并运行开始与 drift 失败时的 PR/head 快照，覆盖两次采样间已观察到的变化。 */
+function mergePullSnapshots(...snapshots) {
+  const pullsByHead = new Map();
+  for (const snapshot of snapshots) {
+    for (const pull of snapshot) {
+      pullsByHead.set(`${pull?.number ?? "unknown"}:${pull?.head?.sha ?? "unknown"}`, pull);
+    }
+  }
+  return [...pullsByHead.values()];
 }
 
 /** 对单个 PR 只消费 provider API 返回的 run/artifact，并发布 App-owned umbrella check。 */
 async function processPullRequest(pull, trustedRecord) {
   const headOid = pull.head.sha;
-  const runs = await githubJson(
-    `repos/${targetRepository}/actions/workflows/architecture-required.yml/runs?event=pull_request&head_sha=${headOid}&per_page=20`,
-  );
-  const run = runs.workflow_runs
+  const runs = await collectGithubPages({
+    endpoint:
+      `repos/${targetRepository}/actions/workflows/architecture-required.yml/runs` +
+      `?event=pull_request&head_sha=${headOid}`,
+    field: "workflow_runs",
+    request: githubJson,
+  });
+  const run = runs
     .filter((candidate) => candidate.head_sha === headOid)
     .sort((left, right) => right.run_attempt - left.run_attempt || right.id - left.id)[0];
   if (run === undefined || run.status !== "completed") {
@@ -77,9 +155,13 @@ async function processPullRequest(pull, trustedRecord) {
     );
     return;
   }
-  const artifacts = await githubJson(`repos/${targetRepository}/actions/runs/${run.id}/artifacts`);
+  const artifacts = await collectGithubPages({
+    endpoint: `repos/${targetRepository}/actions/runs/${run.id}/artifacts`,
+    field: "artifacts",
+    request: githubJson,
+  });
   const expectedPrefix = `gate-evidence-${run.id}-${run.run_attempt}-${headOid}`;
-  const matching = artifacts.artifacts.filter(
+  const matching = artifacts.filter(
     (artifact) => artifact.name === expectedPrefix && !artifact.expired,
   );
   if (matching.length !== 1) {
@@ -95,10 +177,15 @@ async function processPullRequest(pull, trustedRecord) {
       runId: `${run.id}`,
     };
     validateProviderWorkflowRun({ expected: expectedRun, run });
-    const jobsResponse = await githubJson(
-      `repos/${targetRepository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
-    );
-    const namedJobs = jobsResponse.jobs.filter(
+    const jobs = await collectGithubPages({
+      endpoint:
+        `repos/${targetRepository}/actions/runs/${run.id}/attempts/` +
+        `${run.run_attempt}/jobs`,
+      field: "jobs",
+      request: githubJson,
+    });
+    const jobsResponse = { jobs };
+    const namedJobs = jobs.filter(
       (job) => job.name === "gate-evidence / gate-evidence",
     );
     if (namedJobs.length !== 1) {
@@ -188,6 +275,9 @@ async function processPullRequest(pull, trustedRecord) {
       replayDigest,
     );
   } catch (error) {
+    if (error instanceof DriftMonitorInvalidError) {
+      throw error;
+    }
     await publishCheck(
       headOid,
       "completed",
@@ -210,17 +300,21 @@ async function readCandidateRegistry(headOid) {
 
 /** Controller 只在独立 monitor 最近成功且未过期时发布正式结论。 */
 async function assertFreshDriftMonitor() {
-  const runs = await githubJson(
-    `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs?per_page=10`,
-    { token: controllerRepositoryToken },
-  );
-  selectFreshDriftMonitorRun(runs.workflow_runs);
+  try {
+    const runs = await githubJson(
+      `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs?per_page=10`,
+      { token: controllerRepositoryToken },
+    );
+    return selectFreshDriftMonitorRun(runs.workflow_runs);
+  } catch (error) {
+    throw new DriftMonitorInvalidError(error);
+  }
 }
 
-/** monitor 失败或过期时覆盖所有开放 PR 的旧成功结论，再让 Controller workflow 失败。 */
+/** monitor 失败或过期时 best-effort 覆盖全部开放 PR，并返回未撤销成功的异常。 */
 async function publishDriftFailureForOpenPulls(pulls, trustedRecord, error) {
   const reason = error instanceof Error ? error.message : "drift monitor 状态不可验证。";
-  for (const pull of pulls) {
+  return runBestEffort(pulls, async (pull) => {
     const headOid = pull.head.sha;
     const casKey = `${targetRepositoryId}:${headOid}:drift-monitor:${trustedRecord.sequence}`;
     const replayDigest = sha256CanonicalJson({
@@ -241,8 +335,9 @@ async function publishDriftFailureForOpenPulls(pulls, trustedRecord, error) {
       }),
       casKey,
       replayDigest,
+      true,
     );
-  }
+  });
 }
 
 /** 使用 Controller GitHub App installation token 发布唯一 architecture-required check。 */
@@ -253,47 +348,33 @@ async function publishCheck(
   summary,
   casKey,
   replayDigest = null,
+  allowFailureOnHistoryError = false,
 ) {
-  const existing = await githubJson(`repos/${targetRepository}/commits/${headOid}/check-runs`);
-  const appOwned = existing.check_runs.filter(
-    (check) => check.name === "architecture-required" && `${check.app?.id ?? ""}` === controllerAppId,
-  );
-  const replayAction = classifyCheckReplay({
+  return publishControllerCheck({
+    allowFailureOnHistoryError,
+    assertFreshMonitor: assertFreshDriftMonitor,
     casKey,
-    checks: appOwned,
     conclusion,
+    headOid,
+    loadChecks: async () => {
+      const existing = await collectGithubPages({
+        endpoint: `repos/${targetRepository}/commits/${headOid}/check-runs?filter=all`,
+        field: "check_runs",
+        request: githubJson,
+      });
+      return existing.filter(
+        (check) =>
+          check.name === "architecture-required" &&
+          `${check.app?.id ?? ""}` === controllerAppId,
+      );
+    },
+    postCheck: async (body) =>
+      githubJson(`repos/${targetRepository}/check-runs`, {
+        body,
+        method: "POST",
+      }),
     replayDigest,
     status,
-  });
-  if (["idempotent", "idempotent-conflict"].includes(replayAction)) {
-    return;
-  }
-  if (replayAction === "conflict") {
-    status = "completed";
-    conclusion = "failure";
-    summary = JSON.stringify({
-      casKey,
-      reason: "同一 umbrella CAS 出现不同 artifact/evidence digest，Controller fail closed。",
-      replayConflict: true,
-      replayDigest,
-    });
-  }
-  await githubJson(`repos/${targetRepository}/check-runs`, {
-    body: {
-      ...(conclusion === null ? {} : { conclusion }),
-      head_sha: headOid,
-      name: "architecture-required",
-      output: {
-        summary: summary.slice(0, 60_000),
-        title:
-          conclusion === "success"
-            ? "Architecture gates passed"
-            : status === "in_progress"
-              ? "Architecture gates pending"
-              : "Architecture gates failed closed",
-      },
-      status,
-    },
-    method: "POST",
+    summary,
   });
 }
