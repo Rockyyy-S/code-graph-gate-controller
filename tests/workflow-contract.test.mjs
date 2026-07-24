@@ -135,6 +135,14 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
   assert.match(controller, /"--signer-workflow"/u);
   assert.match(controller, /"--signer-digest"/u);
   assert.doesNotMatch(controller, /"--signer-repo"/u);
+  assert.match(
+    controller,
+    /const pulls = await githubJson[\s\S]*?try \{\s+await assertFreshDriftMonitor\(\);\s+\} catch \(error\) \{\s+await publishDriftFailureForOpenPulls\(pulls, trustedRecord, error\);\s+throw error;/u,
+  );
+  assert.match(
+    controller,
+    /status: "drift-monitor-invalid"[\s\S]*?trustedSequence: trustedRecord\.sequence/u,
+  );
 });
 
 test("monitor 完成事件直接触发 Controller，定时兜底按顺序错开", async () => {

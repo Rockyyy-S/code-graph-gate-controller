@@ -26,7 +26,6 @@ if (!/^[1-9][0-9]*$/u.test(controllerAppId ?? "") || !controllerRepositoryToken)
   throw new Error("Controller App identity 或 controller repository token 缺失。\n");
 }
 
-await assertFreshDriftMonitor();
 const trustedRecord = JSON.parse(await readFile("trusted/registry.json", "utf8"));
 const trustedApproval = JSON.parse(
   await readFile("trusted/registry-approval.json", "utf8"),
@@ -45,6 +44,12 @@ validateTrustedRegistryApproval({
   record: trustedRecord,
 });
 const pulls = await githubJson(`repos/${targetRepository}/pulls?state=open&per_page=100`);
+try {
+  await assertFreshDriftMonitor();
+} catch (error) {
+  await publishDriftFailureForOpenPulls(pulls, trustedRecord, error);
+  throw error;
+}
 for (const pull of pulls) {
   await processPullRequest(pull, trustedRecord);
 }
@@ -210,6 +215,34 @@ async function assertFreshDriftMonitor() {
     { token: controllerRepositoryToken },
   );
   selectFreshDriftMonitorRun(runs.workflow_runs);
+}
+
+/** monitor 失败或过期时覆盖所有开放 PR 的旧成功结论，再让 Controller workflow 失败。 */
+async function publishDriftFailureForOpenPulls(pulls, trustedRecord, error) {
+  const reason = error instanceof Error ? error.message : "drift monitor 状态不可验证。";
+  for (const pull of pulls) {
+    const headOid = pull.head.sha;
+    const casKey = `${targetRepositoryId}:${headOid}:drift-monitor:${trustedRecord.sequence}`;
+    const replayDigest = sha256CanonicalJson({
+      reason,
+      schemaVersion: 1,
+      trustedSequence: trustedRecord.sequence,
+    });
+    await publishCheck(
+      headOid,
+      "completed",
+      "failure",
+      JSON.stringify({
+        casKey,
+        reason,
+        replayDigest,
+        status: "drift-monitor-invalid",
+        trustedSequence: trustedRecord.sequence,
+      }),
+      casKey,
+      replayDigest,
+    );
+  }
 }
 
 /** 使用 Controller GitHub App installation token 发布唯一 architecture-required check。 */

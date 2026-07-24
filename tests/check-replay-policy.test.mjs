@@ -7,12 +7,14 @@ const casKey = "1303415307:head:context:implementation:3";
 /** 创建 Controller App 历史 check fixture。 */
 function createCheck({
   conclusion = "success",
+  id = 1,
   replayConflict = false,
   replayDigest = "a".repeat(64),
   status = "completed",
 } = {}) {
   return {
     conclusion,
+    id,
     output: {
       summary: JSON.stringify({
         ...(replayConflict ? { casKey, replayConflict: true } : {}),
@@ -58,6 +60,7 @@ test("已发布的相同冲突 failure 不重复创建 check", () => {
         createCheck(),
         createCheck({
           conclusion: "failure",
+          id: 2,
           replayConflict: true,
           replayDigest: "b".repeat(64),
         }),
@@ -67,6 +70,29 @@ test("已发布的相同冲突 failure 不重复创建 check", () => {
       status: "completed",
     }),
     "idempotent-conflict",
+  );
+});
+
+test("较新的 drift failure 会让历史相同 evidence success 重新发布", () => {
+  assert.equal(
+    classifyCheckReplay({
+      casKey,
+      checks: [
+        createCheck({ id: 1 }),
+        {
+          conclusion: "failure",
+          id: 2,
+          output: {
+            summary: JSON.stringify({ status: "drift-monitor-invalid" }),
+          },
+          status: "completed",
+        },
+      ],
+      conclusion: "success",
+      replayDigest: "a".repeat(64),
+      status: "completed",
+    }),
+    "publish",
   );
 });
 
