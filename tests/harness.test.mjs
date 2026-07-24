@@ -82,20 +82,70 @@ test("嵌套 pnpm 继承 hooks 与依赖二次安装禁用环境", () => {
   assert.equal(environment.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN, "false");
 });
 
-test("每个 gate 使用独立 HOME 与 TMP 路径", () => {
+test("每个 gate 使用短且独立的 HOME 与 TMP 槽位", () => {
   assert.deepEqual(
     createGateRuntimePaths(
       {
         gateHome: "/tmp/gate-home",
         gateTempDirectory: "/tmp/gate-tmp",
       },
-      "unit",
+      35,
     ),
     {
-      gateHome: path.join("/tmp/gate-home", "unit"),
-      gateTempDirectory: path.join("/tmp/gate-tmp", "unit"),
+      gateHome: path.join("/tmp/gate-home", "z"),
+      gateTempDirectory: path.join("/tmp/gate-tmp", "z"),
     },
   );
+  assert.notDeepEqual(
+    createGateRuntimePaths(
+      {
+        gateHome: "/tmp/gate-home",
+        gateTempDirectory: "/tmp/gate-tmp",
+      },
+      36,
+    ),
+    createGateRuntimePaths(
+      {
+        gateHome: "/tmp/gate-home",
+        gateTempDirectory: "/tmp/gate-tmp",
+      },
+      35,
+    ),
+  );
+  assert.throws(
+    () =>
+      createGateRuntimePaths(
+        {
+          gateHome: "/tmp/gate-home",
+          gateTempDirectory: "/tmp/gate-tmp",
+        },
+        -1,
+      ),
+    /非负安全整数/u,
+  );
+});
+
+test("短 TMP 槽位为 Hosted Unix socket fixture 保留 100-byte 路径预算", () => {
+  const { gateTempDirectory } = createGateRuntimePaths(
+    {
+      gateHome: "/tmp/gatecandidate-home",
+      gateTempDirectory: "/g",
+    },
+    36,
+  );
+  const fixtureCacheRoot = path.posix.join(
+    gateTempDirectory,
+    "codegraph-shutdown-timeout-XXXXXX",
+  );
+  const endpoint = path.posix.join(
+    fixtureCacheRoot,
+    "codegraph",
+    "w",
+    "a".repeat(24),
+    `s-${"b".repeat(16)}.sock`,
+  );
+
+  assert.ok(Buffer.byteLength(endpoint, "utf8") <= 100);
 });
 
 test("root Harness 只信任当前候选 Git 路径", () => {
