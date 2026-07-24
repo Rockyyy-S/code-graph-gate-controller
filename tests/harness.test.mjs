@@ -56,10 +56,11 @@ test("non-blocking gate 失败不改变 required blocking 结论", () => {
   );
 });
 
-test("pnpm gate 禁止执行未绑定的 pre/post lifecycle", () => {
+test("pnpm gate 禁止执行未绑定 lifecycle 与只读阶段二次安装", () => {
   assert.deepEqual(createTrustedGateArguments("pnpm", ["unit"]), [
     "--config.enable-pre-post-scripts=false",
     "--config.ignore-pnpmfile=true",
+    "--config.verify-deps-before-run=false",
     "unit",
   ]);
   assert.deepEqual(createTrustedGateArguments("node", ["scripts/check.mjs"]), [
@@ -67,7 +68,7 @@ test("pnpm gate 禁止执行未绑定的 pre/post lifecycle", () => {
   ]);
 });
 
-test("嵌套 pnpm 继承 hooks 禁用环境", () => {
+test("嵌套 pnpm 继承 hooks 与依赖二次安装禁用环境", () => {
   const environment = createGateEnvironment({
     gateHome: "/tmp/gate-home",
     gateTempDirectory: "/tmp/gate-tmp",
@@ -75,8 +76,10 @@ test("嵌套 pnpm 继承 hooks 禁用环境", () => {
 
   assert.equal(environment.npm_config_enable_pre_post_scripts, "false");
   assert.equal(environment.npm_config_ignore_pnpmfile, "true");
+  assert.equal(environment.npm_config_verify_deps_before_run, "false");
   assert.equal(environment.PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS, "false");
   assert.equal(environment.PNPM_CONFIG_IGNORE_PNPMFILE, "true");
+  assert.equal(environment.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN, "false");
 });
 
 test("每个 gate 使用独立 HOME 与 TMP 路径", () => {
