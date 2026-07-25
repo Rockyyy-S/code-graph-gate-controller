@@ -234,7 +234,7 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
-    "84665464a3cead64925ede02cad4d509442916e7ffa4fffa2a57d994dc1f5ce2",
+    "7c1c1440f5ca63c32656870b70ab75a20a8f4d606890fe428eaaae1a8ed64fee",
   );
 });
 
