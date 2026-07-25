@@ -7,7 +7,7 @@ import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "f81031774dba69e14c819bd8214681d6c93b6665";
+const trustedHarnessSha = "5fe566b89322257076fe9cf5a9f181aa8e7d8fe7";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
