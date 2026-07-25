@@ -217,7 +217,7 @@ test("生产 story 1.3 proposal 与 sequence 16、精确 PR head 和最终 produ
     {
       currentRecord,
       expectedProducerWorkflowSha: "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
-      now: Date.parse("2026-07-25T13:00:00+08:00"),
+      now: Date.parse("2026-07-25T13:10:00+08:00"),
     },
   );
 
@@ -226,7 +226,7 @@ test("生产 story 1.3 proposal 与 sequence 16、精确 PR head 和最终 produ
   assert.equal(proposals[0].record.pullNumber, 5);
   assert.equal(
     proposals[0].record.headOid,
-    "22f6796dd18bed18d49f22631553d7a183da7558",
+    "001bcafacc9e36f17f510249f15a35b6ba963c20",
   );
 });
 
