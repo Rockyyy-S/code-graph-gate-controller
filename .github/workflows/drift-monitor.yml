@@ -1,6 +1,8 @@
 name: architecture-drift-monitor
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "2-59/5 * * * *"
 

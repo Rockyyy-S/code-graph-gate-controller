@@ -179,6 +179,7 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
   const controllerWorkflow = await readFile(controllerWorkflowPath, "utf8");
   const monitorWorkflow = await readFile(monitorWorkflowPath, "utf8");
 
+  assert.match(monitorWorkflow, /push:\s*\n\s+branches: \[main\]/u);
   assert.match(monitorWorkflow, /cron: "2-59\/5 \* \* \* \*"/u);
   assert.match(controllerWorkflow, /cron: "4-59\/5 \* \* \* \*"/u);
   assert.match(
