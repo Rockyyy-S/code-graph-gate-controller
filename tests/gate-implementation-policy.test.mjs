@@ -97,6 +97,25 @@ test("gate 实现摘要绑定根脚本文本和受保护 checker 内容", async 
   assert.notEqual(toolchainDrift.digest, baseline.digest);
 });
 
+test("GateHarness 独立拒绝恒成功或内联执行的 pnpm 根脚本", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  for (const implementation of ["true", "exit 0", "echo ok", "node -eprocess.exit(0)"]) {
+    await writeFile(
+      path.join(fixture.root, "package.json"),
+      JSON.stringify({ scripts: { unit: implementation } }),
+    );
+    await assert.rejects(
+      computeGateImplementationDigest(fixture.root, fixture.registry, {
+        protectedDirectories: [],
+        optionalProtectedPaths: [],
+        protectedPaths: ["scripts/check.mjs"],
+      }),
+      /恒成功|内联|no-op/u,
+    );
+  }
+});
+
 test("受保护文本的 CRLF 与 LF 产生相同实现摘要", async (context) => {
   const fixture = await createFixture();
   context.after(() => rm(fixture.root, { force: true, recursive: true }));
@@ -179,5 +198,103 @@ test("被忽略的本地生成目录不污染 clean checkout 实现摘要", asyn
       relativePath.startsWith("scripts/generated/"),
     ),
     false,
+  );
+});
+
+test("公共能力 binding 引用的专属入口、测试与 fixture 全部进入实现摘要", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  await mkdir(path.join(fixture.root, "ci"), { recursive: true });
+  await mkdir(path.join(fixture.root, "tests", "contract"), { recursive: true });
+  await mkdir(path.join(fixture.root, "tests", "fixtures"), { recursive: true });
+  await writeFile(
+    path.join(fixture.root, "ci", "public-capability-gates.v1.json"),
+    JSON.stringify({
+      bindings: [
+        {
+          capabilityId: "rpc:graph/query",
+          gateId: "graph-query-contract",
+          verification: {
+            entryPath: "scripts/check.mjs",
+            evidenceId: "public-capability:rpc:graph/query",
+            fixturePath: "tests/fixtures/graph-query.json",
+            testPath: "tests/contract/graph-query.test.ts",
+          },
+        },
+      ],
+      schemaVersion: 1,
+    }),
+  );
+  await writeFile(
+    path.join(fixture.root, "tests", "contract", "graph-query.test.ts"),
+    "export const covered = true;\n",
+  );
+  await writeFile(
+    path.join(fixture.root, "tests", "fixtures", "graph-query.json"),
+    '{"method":"graph/query"}\n',
+  );
+  const policy = {
+    protectedDirectories: [],
+    optionalProtectedPaths: [],
+    protectedPaths: ["scripts/check.mjs"],
+  };
+  const baseline = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+
+  await writeFile(
+    path.join(fixture.root, "tests", "contract", "graph-query.test.ts"),
+    "export const covered = false;\n",
+  );
+  const testDrift = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+  assert.notEqual(testDrift.digest, baseline.digest);
+
+  await writeFile(
+    path.join(fixture.root, "tests", "contract", "graph-query.test.ts"),
+    "export const covered = true;\n",
+  );
+  await writeFile(
+    path.join(fixture.root, "tests", "fixtures", "graph-query.json"),
+    '{"method":"graph/query","invalid":true}\n',
+  );
+  const fixtureDrift = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+  assert.notEqual(fixtureDrift.digest, baseline.digest);
+});
+
+test("能力专属 node gate 可携带绑定测试、fixture 与 evidence 的 argv", async (context) => {
+  const fixture = await createFixture();
+  context.after(() => rm(fixture.root, { force: true, recursive: true }));
+  fixture.registry.gates = [
+    {
+      gateDefinition: {
+        command: [
+          "node",
+          "scripts/check.mjs",
+          "--capability",
+          "rpc:graph/query",
+          "--test",
+          "tests/contract/graph-query.test.ts",
+        ],
+        gateId: "graph-query-contract",
+      },
+    },
+  ];
+
+  await assert.doesNotReject(() =>
+    computeGateImplementationDigest(fixture.root, fixture.registry, {
+      protectedDirectories: [],
+      optionalProtectedPaths: [],
+      protectedPaths: [],
+    }),
   );
 });

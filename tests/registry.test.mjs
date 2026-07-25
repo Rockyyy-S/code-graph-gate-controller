@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
+  loadApprovedProposals,
   parseEvidenceProducerId,
+  selectTrustedRecordForCandidate,
   UNBOUND_GATE_IMPLEMENTATION_DIGEST_V1,
+  validateProposedRegistryApproval,
   validateRegistry,
   validateTrustedRegistryApproval,
   validateTrustedRegistryRecord,
@@ -31,6 +36,49 @@ function createRegistry(overrides = {}) {
       },
     ],
     schemaVersion: 1,
+  };
+}
+
+/** 创建与当前可信根闭合的 proposed record/approval 测试对。 */
+function createProposedPair({
+  currentRecord,
+  effectiveAt,
+  expiresAt,
+  headOid,
+  pullNumber,
+}) {
+  const approval = {
+    approvalKind: "proposed-gate-registry",
+    approvedAt: effectiveAt,
+    approvedBy: "owner",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    expiresAt,
+    gateImplementationDigest: "e".repeat(64),
+    gateRegistryDigest: "f".repeat(64),
+    headOid,
+    producerWorkflowSha: workflowSha,
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber,
+    schemaVersion: 1,
+    sequence: currentRecord.sequence + 1,
+    sourceCommit: headOid,
+  };
+  return {
+    approval,
+    record: {
+      approvalEvidenceDigest: sha256CanonicalJson(approval),
+      baseGateRegistryDigest: approval.baseGateRegistryDigest,
+      effectiveAt,
+      expiresAt,
+      gateImplementationDigest: approval.gateImplementationDigest,
+      gateRegistryDigest: approval.gateRegistryDigest,
+      headOid,
+      providerRepositoryId: approval.providerRepositoryId,
+      pullNumber,
+      schemaVersion: 1,
+      sequence: approval.sequence,
+      sourceCommit: headOid,
+    },
   };
 }
 
@@ -75,6 +123,17 @@ test("registry 对摘要漂移、未知字段和非法 trigger fail closed", () 
     gateDefinitionDigest: sha256CanonicalJson(secondDefinition),
   });
   assert.throws(() => validateRegistry(duplicateCheckId), /checkId/u);
+});
+
+test("registry 独立拒绝 no-op executable 与 Node 内联命令", () => {
+  for (const command of [
+    ["true"],
+    ["/bin/echo", "ok"],
+    ["node", "--eval=process.exit(0)"],
+    ["node", "-eprocess.exit(0)"],
+  ]) {
+    assert.throws(() => validateRegistry(createRegistry({ command })), /no-op|恒成功/u);
+  }
 });
 
 test("sequence=3 可信记录绑定 gate 实现摘要", () => {
@@ -273,4 +332,253 @@ test("sequence=3 迁移把未绑定实现状态固定为唯一 sentinel", () => 
       }),
     /TrustedGateRegistryApprovalV1/u,
   );
+});
+
+test("proposed registry 只对批准的精确 PR head 和当前可信根生效", () => {
+  const currentRecord = {
+    approvalEvidenceDigest: "a".repeat(64),
+    effectiveAt: "2026-07-23T00:00:00Z",
+    gateImplementationDigest: "b".repeat(64),
+    gateRegistryDigest: "c".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 16,
+    sourceCommit: "d".repeat(40),
+  };
+  const approval = {
+    approvalKind: "proposed-gate-registry",
+    approvedAt: "2026-07-24T00:00:00Z",
+    approvedBy: "owner",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    expiresAt: "2026-07-25T00:00:00Z",
+    gateImplementationDigest: "e".repeat(64),
+    gateRegistryDigest: "f".repeat(64),
+    headOid: "1".repeat(40),
+    producerWorkflowSha: workflowSha,
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 5,
+    schemaVersion: 1,
+    sequence: 17,
+    sourceCommit: "1".repeat(40),
+  };
+  const record = {
+    approvalEvidenceDigest: sha256CanonicalJson(approval),
+    baseGateRegistryDigest: approval.baseGateRegistryDigest,
+    effectiveAt: approval.approvedAt,
+    expiresAt: approval.expiresAt,
+    gateImplementationDigest: approval.gateImplementationDigest,
+    gateRegistryDigest: approval.gateRegistryDigest,
+    headOid: approval.headOid,
+    providerRepositoryId: approval.providerRepositoryId,
+    pullNumber: approval.pullNumber,
+    schemaVersion: 1,
+    sequence: approval.sequence,
+    sourceCommit: approval.sourceCommit,
+  };
+
+  assert.doesNotThrow(() =>
+    validateProposedRegistryApproval({
+      approval,
+      currentRecord,
+      expectedProducerWorkflowSha: workflowSha,
+      now: Date.parse("2026-07-24T12:00:00Z"),
+      record,
+    }),
+  );
+  assert.equal(
+    selectTrustedRecordForCandidate({
+      currentRecord,
+      headOid: record.headOid,
+      now: Date.parse("2026-07-24T12:00:00Z"),
+      proposals: [{ approval, record }],
+      providerRepositoryId: record.providerRepositoryId,
+      pullNumber: record.pullNumber,
+      registryDigest: record.gateRegistryDigest,
+      workflowSha,
+    }).sourceCommit,
+    record.headOid,
+  );
+  assert.throws(
+    () =>
+      selectTrustedRecordForCandidate({
+        currentRecord,
+        headOid: "2".repeat(40),
+        now: Date.parse("2026-07-24T12:00:00Z"),
+        proposals: [{ approval, record }],
+        providerRepositoryId: record.providerRepositoryId,
+        pullNumber: record.pullNumber,
+        registryDigest: record.gateRegistryDigest,
+        workflowSha,
+      }),
+    /未获批准|head/u,
+  );
+
+  const futureApproval = {
+    ...approval,
+    approvedAt: "2026-07-24T00:00:00Z",
+  };
+  const futureRecord = {
+    ...record,
+    approvalEvidenceDigest: "0".repeat(64),
+    effectiveAt: "2026-07-24T13:00:00Z",
+  };
+  futureRecord.approvalEvidenceDigest = sha256CanonicalJson(futureApproval);
+  assert.throws(
+    () =>
+      validateProposedRegistryApproval({
+        approval: futureApproval,
+        currentRecord,
+        expectedProducerWorkflowSha: workflowSha,
+        now: Date.parse("2026-07-24T12:00:00Z"),
+        record: futureRecord,
+      }),
+    /ProposedGateRegistryApprovalV1/u,
+  );
+
+  assert.throws(
+    () =>
+      selectTrustedRecordForCandidate({
+        currentRecord,
+        headOid: record.headOid,
+        now: Date.parse("2026-07-25T00:00:01Z"),
+        proposals: [{ approval, record }],
+        providerRepositoryId: record.providerRepositoryId,
+        pullNumber: record.pullNumber,
+        registryDigest: record.gateRegistryDigest,
+        workflowSha,
+      }),
+    /ProposedGateRegistryApprovalV1/u,
+  );
+});
+
+test("相同 registry digest 的精确 proposal 可批准新的 gate implementation", () => {
+  const currentRecord = {
+    approvalEvidenceDigest: "a".repeat(64),
+    effectiveAt: "2026-07-23T00:00:00Z",
+    gateImplementationDigest: "b".repeat(64),
+    gateRegistryDigest: "c".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 16,
+    sourceCommit: "d".repeat(40),
+  };
+  const approval = {
+    approvalKind: "proposed-gate-registry",
+    approvedAt: "2026-07-24T00:00:00Z",
+    approvedBy: "owner",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    expiresAt: "2026-07-25T00:00:00Z",
+    gateImplementationDigest: "e".repeat(64),
+    gateRegistryDigest: currentRecord.gateRegistryDigest,
+    headOid: "1".repeat(40),
+    producerWorkflowSha: workflowSha,
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 5,
+    schemaVersion: 1,
+    sequence: 17,
+    sourceCommit: "1".repeat(40),
+  };
+  const record = {
+    approvalEvidenceDigest: sha256CanonicalJson(approval),
+    baseGateRegistryDigest: approval.baseGateRegistryDigest,
+    effectiveAt: approval.approvedAt,
+    expiresAt: approval.expiresAt,
+    gateImplementationDigest: approval.gateImplementationDigest,
+    gateRegistryDigest: approval.gateRegistryDigest,
+    headOid: approval.headOid,
+    providerRepositoryId: approval.providerRepositoryId,
+    pullNumber: approval.pullNumber,
+    schemaVersion: 1,
+    sequence: approval.sequence,
+    sourceCommit: approval.sourceCommit,
+  };
+
+  const selected = selectTrustedRecordForCandidate({
+    currentRecord,
+    headOid: record.headOid,
+    now: Date.parse("2026-07-24T12:00:00Z"),
+    proposals: [{ approval, record }],
+    providerRepositoryId: record.providerRepositoryId,
+    pullNumber: record.pullNumber,
+    registryDigest: record.gateRegistryDigest,
+    workflowSha,
+  });
+
+  assert.equal(selected.gateImplementationDigest, approval.gateImplementationDigest);
+  assert.equal(selected.sequence, 17);
+});
+
+test("proposal loader 校验全部记录完整性但仅返回当前有效时间窗", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "controller-proposals-"));
+  const currentRecord = {
+    approvalEvidenceDigest: "a".repeat(64),
+    effectiveAt: "2026-07-23T00:00:00Z",
+    gateImplementationDigest: "b".repeat(64),
+    gateRegistryDigest: "c".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 16,
+    sourceCommit: "d".repeat(40),
+  };
+  const fixtures = [
+    ["active", createProposedPair({
+      currentRecord,
+      effectiveAt: "2026-07-24T00:00:00Z",
+      expiresAt: "2026-07-25T00:00:00Z",
+      headOid: "1".repeat(40),
+      pullNumber: 1,
+    })],
+    ["expired", createProposedPair({
+      currentRecord,
+      effectiveAt: "2026-07-23T00:00:00Z",
+      expiresAt: "2026-07-24T01:00:00Z",
+      headOid: "2".repeat(40),
+      pullNumber: 2,
+    })],
+    ["future", createProposedPair({
+      currentRecord,
+      effectiveAt: "2026-07-24T13:00:00Z",
+      expiresAt: "2026-07-25T00:00:00Z",
+      headOid: "3".repeat(40),
+      pullNumber: 3,
+    })],
+  ];
+  try {
+    for (const [name, fixture] of fixtures) {
+      await Promise.all([
+        writeFile(path.join(directory, `${name}.json`), JSON.stringify(fixture.record)),
+        writeFile(
+          path.join(directory, `${name}.approval.json`),
+          JSON.stringify(fixture.approval),
+        ),
+      ]);
+    }
+
+    const proposals = await loadApprovedProposals(directory, {
+      currentRecord,
+      expectedProducerWorkflowSha: workflowSha,
+      now: Date.parse("2026-07-24T12:00:00Z"),
+    });
+    assert.deepEqual(proposals.map(({ record }) => record.pullNumber), [1]);
+
+    const invalidExpired = fixtures[1][1];
+    await writeFile(
+      path.join(directory, "invalid-expired.json"),
+      JSON.stringify({ ...invalidExpired.record, approvalEvidenceDigest: "0".repeat(64) }),
+    );
+    await writeFile(
+      path.join(directory, "invalid-expired.approval.json"),
+      JSON.stringify(invalidExpired.approval),
+    );
+    await assert.rejects(
+      loadApprovedProposals(directory, {
+        currentRecord,
+        expectedProducerWorkflowSha: workflowSha,
+        now: Date.parse("2026-07-24T12:00:00Z"),
+      }),
+      /ProposedGateRegistryApprovalV1/u,
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });

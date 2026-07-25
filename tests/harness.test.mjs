@@ -7,6 +7,7 @@ import {
   createTrustedGateArguments,
   didRequiredBlockingGatesPass,
   evaluateApplicability,
+  runIdentityProcessTool,
 } from "../lib/harness.mjs";
 import {
   createTrustedGitArguments,
@@ -70,10 +71,14 @@ test("pnpm gate 禁止执行未绑定 lifecycle 与只读阶段二次安装", ()
 
 test("嵌套 pnpm 继承 hooks 与依赖二次安装禁用环境", () => {
   const environment = createGateEnvironment({
+    baseOid: "a".repeat(40),
     gateHome: "/tmp/gate-home",
     gateTempDirectory: "/tmp/gate-tmp",
+    headOid: "b".repeat(40),
   });
 
+  assert.equal(environment.CODEGRAPH_BASE_OID, "a".repeat(40));
+  assert.equal(environment.CODEGRAPH_HEAD_OID, "b".repeat(40));
   assert.equal(environment.npm_config_enable_pre_post_scripts, "false");
   assert.equal(environment.npm_config_ignore_pnpmfile, "true");
   assert.equal(environment.npm_config_verify_deps_before_run, "false");
@@ -156,4 +161,32 @@ test("root Harness 只信任当前候选 Git 路径", () => {
     "/workspace/candidate",
     "status",
   ]);
+});
+
+test("UID 清理工具的每次 pkill/pgrep 都受 Harness 剩余绝对预算约束", async () => {
+  let receivedOptions;
+  const noMatch = await runIdentityProcessTool("pgrep", ["-u", "1001"], {
+    deadlineAt: 150,
+    exec: async (_executable, _args, options) => {
+      receivedOptions = options;
+      const error = new Error("no match");
+      error.code = 1;
+      throw error;
+    },
+    now: () => 100,
+  });
+
+  assert.equal(noMatch, false);
+  assert.equal(receivedOptions.timeout, 50);
+  assert.equal(receivedOptions.killSignal, "SIGKILL");
+  await assert.rejects(
+    runIdentityProcessTool("pkill", ["-KILL", "-u", "1001"], {
+      deadlineAt: 100,
+      exec: async () => {
+        throw new Error("不应执行");
+      },
+      now: () => 100,
+    }),
+    /deadline|预算/u,
+  );
 });

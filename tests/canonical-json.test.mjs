@@ -15,3 +15,26 @@ test("canonical JSON 拒绝非 JSON 值和非法 Unicode", () => {
     assert.throws(() => canonicalizeJson(value), /JCS/u);
   }
 });
+
+test("canonical JSON 数组拒绝访问器、隐藏字段和自定义原型且不执行 getter", () => {
+  let getterCalls = 0;
+  const accessor = [1];
+  Object.defineProperty(accessor, "0", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return 1;
+    },
+  });
+  const symbolField = [1];
+  Object.defineProperty(symbolField, Symbol("hidden"), { value: 2 });
+  const hiddenElement = [1];
+  Object.defineProperty(hiddenElement, "0", { enumerable: false, value: 1 });
+  const customPrototype = [1];
+  Object.setPrototypeOf(customPrototype, Object.create(Array.prototype));
+
+  for (const value of [accessor, symbolField, hiddenElement, customPrototype]) {
+    assert.throws(() => canonicalizeJson(value), /JCS/u);
+  }
+  assert.equal(getterCalls, 0);
+});
