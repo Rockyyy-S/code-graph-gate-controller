@@ -232,6 +232,13 @@ test("Controller 接受默认分支可信提交上的最近成功 monitor run", 
     monitorRun(),
   ];
   assert.equal(selectFreshDriftMonitorRun(runs, { ...monitorSelection, now }), runs[1]);
+  assert.equal(
+    selectFreshDriftMonitorRun([monitorRun({ event: "push" })], {
+      ...monitorSelection,
+      now,
+    }).event,
+    "push",
+  );
 });
 
 test("Controller 拒绝明显来自未来的 monitor 完成时间", () => {
