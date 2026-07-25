@@ -184,6 +184,43 @@ jobs:
             XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
             XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
             pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
+          # 候选 lifecycle 继续全局禁用；仅对架构锁定且 lockfile integrity 固定的原生依赖执行受控构建。
+          [[ "$(grep -Ec '^  better-sqlite3@12\.11\.1:$' "$candidate_root/pnpm-lock.yaml")" -eq 2 ]]
+          grep -A2 '^  better-sqlite3@12\.11\.1:$' "$candidate_root/pnpm-lock.yaml" \
+            | grep -Fqx '    resolution: {integrity: sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==}'
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            CI=true \
+            HOME=/tmp/gatecandidate-install-home \
+            LANG=C.UTF-8 \
+            PATH="$TRUSTED_PNPM_BIN:$PATH" \
+            TMPDIR=/tmp/gatecandidate-install-tmp \
+            XDG_CACHE_HOME=/tmp/gatecandidate-install-home/.cache \
+            XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
+            XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
+            node --input-type=module --eval \
+              'import { readFile } from "node:fs/promises"; const value = JSON.parse(await readFile("packages/adapters/store-sqlite/package.json", "utf8")); if (value?.dependencies?.["better-sqlite3"] !== "12.11.1") process.exit(1);'
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            CI=true \
+            HOME=/tmp/gatecandidate-install-home \
+            LANG=C.UTF-8 \
+            PATH="$TRUSTED_PNPM_BIN:$PATH" \
+            TMPDIR=/tmp/gatecandidate-install-tmp \
+            XDG_CACHE_HOME=/tmp/gatecandidate-install-home/.cache \
+            XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
+            XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
+            pnpm --filter @codegraph/adapter-store-sqlite --fail-if-no-match rebuild better-sqlite3
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            CI=true \
+            HOME=/tmp/gatecandidate-install-home \
+            LANG=C.UTF-8 \
+            PATH="$TRUSTED_PNPM_BIN:$PATH" \
+            TMPDIR=/tmp/gatecandidate-install-tmp \
+            XDG_CACHE_HOME=/tmp/gatecandidate-install-home/.cache \
+            XDG_CONFIG_HOME=/tmp/gatecandidate-install-home/.config \
+            XDG_DATA_HOME=/tmp/gatecandidate-install-home/.local/share \
+            pnpm --filter @codegraph/adapter-store-sqlite --fail-if-no-match exec \
+              node --input-type=module --eval \
+              'import Database from "better-sqlite3"; const database = new Database(":memory:"); database.prepare("SELECT 1").get(); database.close();'
           cleanup_install_identity
           trap - EXIT
           # 从候选 UID 无法访问的原 checkout 恢复 Git 元数据，再拒绝任何 tracked 漂移。

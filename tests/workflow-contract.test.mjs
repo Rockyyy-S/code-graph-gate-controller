@@ -9,6 +9,8 @@ const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", im
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
 const trustedHarnessSha = "5fe566b89322257076fe9cf5a9f181aa8e7d8fe7";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
+const betterSqliteIntegrity =
+  "sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
@@ -82,6 +84,21 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
     workflow,
     /sudo -u gatecandidate env -i --chdir="\$candidate_root"[\s\S]*pnpm install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
   );
+  assert.match(workflow, /grep -Ec '\^  better-sqlite3@12\\\.11\\\.1:\$'/u);
+  assert.match(workflow, new RegExp(betterSqliteIntegrity.replaceAll("+", "\\+"), "u"));
+  assert.match(
+    workflow,
+    /value\?\.dependencies\?\.\["better-sqlite3"\] !== "12\.11\.1"/u,
+  );
+  assert.match(
+    workflow,
+    /pnpm --filter @codegraph\/adapter-store-sqlite --fail-if-no-match rebuild better-sqlite3/u,
+  );
+  assert.match(
+    workflow,
+    /import Database from "better-sqlite3"; const database = new Database\(":memory:"\)/u,
+  );
+  assert.doesNotMatch(workflow, /pnpm install[^\n]*--ignore-scripts=false/u);
   assert.match(workflow, /workspace_root="\$\(realpath -- "\$GITHUB_WORKSPACE"\)"/u);
   assert.match(workflow, /source_candidate="\$\(realpath -- candidate\)"/u);
   assert.match(workflow, /candidate_parent=\/tmp\/gatecandidate-root/u);
