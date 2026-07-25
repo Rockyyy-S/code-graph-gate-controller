@@ -7,8 +7,8 @@
   "headOid": "2515a0a68178051fe87cf305851fa386cad0db77",
   "baseGateRegistryDigest": "9a4cb4adcce9c1767ce156cb0b5dc464eae2ca9cbca124caa5b7d0e770a74bd0",
   "gateRegistryDigest": "b91f8793a5edb4a1f8428c2aca88ba6ecd7b89e23a4a5af1ab72217979903a4f",
-  "gateImplementationDigest": "84665464a3cead64925ede02cad4d509442916e7ffa4fffa2a57d994dc1f5ce2",
-  "approvalEvidenceDigest": "75c50447531381bc6b398a610caa7248f36262d20c9b50e5e17feab7cda8db51",
+  "gateImplementationDigest": "7c1c1440f5ca63c32656870b70ab75a20a8f4d606890fe428eaaae1a8ed64fee",
+  "approvalEvidenceDigest": "2e0567ffdb2c86adc35671fa286c3751336ba3ee03119c29b6c08b3d3f149314",
   "effectiveAt": "2026-07-25T19:50:27+08:00",
   "expiresAt": "2026-08-01T19:50:27+08:00"
 }
