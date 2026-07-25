@@ -208,7 +208,7 @@ test("可信 registry sequence=17 正式提升最终 Story 1.3 根", async () =>
   );
 });
 
-test("sequence 17 提升后不存在已消费的 story 1.3 proposal", async () => {
+test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 闭合", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -217,11 +217,25 @@ test("sequence 17 提升后不存在已消费的 story 1.3 proposal", async () =
     {
       currentRecord,
       expectedProducerWorkflowSha: "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
-      now: Date.parse("2026-07-25T13:11:00+08:00"),
+      now: Date.parse("2026-07-25T16:48:00+08:00"),
     },
   );
 
-  assert.deepEqual(proposals, []);
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].record.sequence, 18);
+  assert.equal(proposals[0].record.pullNumber, 8);
+  assert.equal(
+    proposals[0].record.headOid,
+    "0a7a9381b75fa6e46b48954532b8eb993404a85c",
+  );
+  assert.equal(
+    proposals[0].record.gateRegistryDigest,
+    "39eaaa920a87948a9cd563c5f76498e6bf1e31a74cd8e724e7c9a5331633a885",
+  );
+  assert.equal(
+    proposals[0].record.gateImplementationDigest,
+    "84665464a3cead64925ede02cad4d509442916e7ffa4fffa2a57d994dc1f5ce2",
+  );
 });
 
 test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移", async () => {
