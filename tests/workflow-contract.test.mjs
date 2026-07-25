@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { GATE_HARNESS_ARGUMENT_NAMES_V2 } from "../bin/produce-gate-evidence.mjs";
+import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "da694bce36baf82a5e839ab72fe24139f4d0a25d";
+const trustedHarnessSha = "f81031774dba69e14c819bd8214681d6c93b6665";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
@@ -137,17 +139,26 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
   assert.doesNotMatch(controller, /"--signer-repo"/u);
   assert.match(
     controller,
-    /let pulls = \[\];[\s\S]*?await assertFreshDriftMonitor\(\);[\s\S]*?pulls = await listOpenPulls\(\);[\s\S]*?listOpenPullsBestEffort\(\)[\s\S]*?publishDriftFailureForOpenPulls/u,
+    /trustedState = await loadState\(\);[\s\S]*?await assertFresh\(\);[\s\S]*?pulls = await listPulls\(\);[\s\S]*?catch \(error\)[\s\S]*?await revokePulls/u,
   );
+  assert.match(
+    controller,
+    /for \(let attempt = 0; attempt < 5; attempt \+= 1\)[\s\S]*?listOpenPullsBestEffort\(\)[\s\S]*?publishDriftFailureForOpenPulls[\s\S]*?sameCurrentPullSnapshot/u,
+  );
+  assert.match(controller, /assertUniqueOpenPullHeads\(pulls\)/u);
+  assert.match(controller, /selectLatestWorkflowRun\(runs, headOid, pull\.number\)/u);
+  assert.match(controller, /assertTrustedCandidateSelectionCurrent/u);
+  assert.match(controller, /closePublishedSuccess/u);
+  assert.match(controller, /publishCheckForStablePull/u);
   assert.match(controller, /check-runs\?filter=all/u);
   assert.match(controller, /allowFailureOnHistoryError/u);
   assert.match(
     controller,
-    /status: "drift-monitor-invalid"[\s\S]*?trustedSequence: trustedRecord\.sequence/u,
+    /"drift-monitor-invalid"[\s\S]*?"controller-invalid"[\s\S]*?trustedSequence/u,
   );
 });
 
-test("monitor 完成事件直接触发 Controller，定时兜底按顺序错开", async () => {
+test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续撤销过期 success", async () => {
   const controllerWorkflow = await readFile(controllerWorkflowPath, "utf8");
   const monitorWorkflow = await readFile(monitorWorkflowPath, "utf8");
 
@@ -160,5 +171,56 @@ test("monitor 完成事件直接触发 Controller，定时兜底按顺序错开"
   assert.match(
     controllerWorkflow,
     /concurrency:\s*\n\s+group: architecture-gate-controller\s*\n\s+cancel-in-progress: false/u,
+  );
+  assert.match(controllerWorkflow, /CONTROLLER_TRUSTED_SHA: \$\{\{ github\.sha \}\}/u);
+  assert.match(controllerWorkflow, /node bin\/run-controller-lease-guardian\.mjs/u);
+  assert.match(controllerWorkflow, /timeout-minutes: 55/u);
+  assert.match(controllerWorkflow, /ref: \$\{\{ github\.sha \}\}/u);
+  assert.match(monitorWorkflow, /ref: \$\{\{ github\.sha \}\}/u);
+  assert.doesNotMatch(controllerWorkflow, /workflow_dispatch:/u);
+  assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:/u);
+});
+
+test("阶段 B producer 固定 Harness V2 并传入 proposal/PR 参数", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+
+  assert.equal(GATE_HARNESS_CONTRACT_VERSION, 2);
+  assert.deepEqual(GATE_HARNESS_ARGUMENT_NAMES_V2, [
+    "--artifact-directory",
+    "--base-oid",
+    "--candidate-root",
+    "--controller-repository",
+    "--gate-gid",
+    "--gate-home",
+    "--gate-temp-directory",
+    "--gate-uid",
+    "--head-oid",
+    "--object-format",
+    "--provider-repository-id",
+    "--proposed-record-directory",
+    "--pull-number",
+    "--trusted-record",
+    "--workflow-file",
+    "--workflow-sha",
+  ]);
+  assert.match(workflow, /--pull-number "\$PULL_NUMBER"/u);
+  assert.match(
+    workflow,
+    /--proposed-record-directory "\$PWD\/trusted-state\/trusted\/proposed"/u,
+  );
+  assert.doesNotMatch(workflow, /阶段 A 保留 V1 pin/u);
+});
+
+test("drift monitor 完整分页读取 ruleset 列表", async () => {
+  const monitor = await readFile(
+    new URL("../bin/run-drift-monitor.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(monitor, /collectGithubPages\(\{/u);
+  assert.match(monitor, /rulesets\?includes_parents=false/u);
+  assert.doesNotMatch(
+    monitor,
+    /const summaries = await githubJson\(`repos\/\$\{targetRepository\}\/rulesets/u,
   );
 });

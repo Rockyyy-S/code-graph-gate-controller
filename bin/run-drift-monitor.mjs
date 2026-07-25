@@ -1,5 +1,6 @@
 import { evaluateProviderDrift } from "../lib/drift-policy.mjs";
 import { githubGraphql, githubJson } from "../lib/github-api.mjs";
+import { collectGithubPages } from "../lib/github-pagination.mjs";
 
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const expectedRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
@@ -10,7 +11,11 @@ if (!/^[1-9][0-9]*$/u.test(controllerAppId ?? "")) {
 }
 
 const repository = await githubJson(`repos/${targetRepository}`);
-const summaries = await githubJson(`repos/${targetRepository}/rulesets?includes_parents=false`);
+const summaries = await collectGithubPages({
+  endpoint: `repos/${targetRepository}/rulesets?includes_parents=false`,
+  field: null,
+  request: githubJson,
+});
 const detailedRulesets = await Promise.all(
   summaries.map(({ id }) => githubJson(`repos/${targetRepository}/rulesets/${id}`)),
 );
