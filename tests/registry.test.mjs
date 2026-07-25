@@ -216,8 +216,8 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
       currentRecord,
-      expectedProducerWorkflowSha: "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
-      now: Date.parse("2026-07-25T16:48:00+08:00"),
+      expectedProducerWorkflowSha: "0981130a71a3960aa374a82829d42aa9d9f15012",
+      now: Date.parse("2026-07-25T17:11:00+08:00"),
     },
   );
 
@@ -226,11 +226,11 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
   assert.equal(proposals[0].record.pullNumber, 8);
   assert.equal(
     proposals[0].record.headOid,
-    "0a7a9381b75fa6e46b48954532b8eb993404a85c",
+    "dd6ad1d34bb3a23166bce57e28adbc411b16bb26",
   );
   assert.equal(
     proposals[0].record.gateRegistryDigest,
-    "39eaaa920a87948a9cd563c5f76498e6bf1e31a74cd8e724e7c9a5331633a885",
+    "b91f8793a5edb4a1f8428c2aca88ba6ecd7b89e23a4a5af1ab72217979903a4f",
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
