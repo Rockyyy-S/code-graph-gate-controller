@@ -30,7 +30,7 @@ import {
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
 const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
-const producerWorkflowSha = "78e84adecc7ef1b73a881dbd4bb6224ce7a7a769";
+const producerWorkflowSha = "c01e7c0550b9d9150df26c20cebb10aaefdf648d";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
 const controllerTrustedSha = process.env.CONTROLLER_TRUSTED_SHA;
@@ -137,7 +137,7 @@ async function loadTrustedState() {
   );
   validateTrustedRegistryApproval({
     approval: trustedApproval,
-    expectedProducerWorkflowSha: producerWorkflowSha,
+    expectedProducerWorkflowSha: trustedApproval.producerWorkflowSha,
     previousApproval: previousTrustedApproval,
     previousRecord: previousTrustedRecord,
     record: trustedRecord,

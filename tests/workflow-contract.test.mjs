@@ -121,9 +121,18 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /env -i HOME=/u);
 });
 
-test("Controller attestation policy 与已批准 producer SHA 保持一致", async () => {
+test("Controller 分别固定当前可信根与 proposed producer SHA", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
+  );
+  const proposedApproval = JSON.parse(
+    await readFile(
+      new URL(
+        "../trusted/proposed/story-1-3-pr-5.approval.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
   );
   const controller = await readFile(
     new URL("../bin/run-controller.mjs", import.meta.url),
@@ -132,8 +141,16 @@ test("Controller attestation policy 与已批准 producer SHA 保持一致", asy
 
   assert.match(
     controller,
-    new RegExp(`const producerWorkflowSha = "${approval.producerWorkflowSha}";`, "u"),
+    new RegExp(
+      `const producerWorkflowSha = "${proposedApproval.producerWorkflowSha}";`,
+      "u",
+    ),
   );
+  assert.match(
+    controller,
+    /expectedProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u,
+  );
+  assert.notEqual(approval.producerWorkflowSha, proposedApproval.producerWorkflowSha);
   assert.match(controller, /"--signer-workflow"/u);
   assert.match(controller, /"--signer-digest"/u);
   assert.doesNotMatch(controller, /"--signer-repo"/u);

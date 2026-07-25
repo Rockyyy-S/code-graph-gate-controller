@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
@@ -204,6 +205,28 @@ test("可信 registry sequence=16 绑定批准证据、候选提交、实现摘�
       previousRecord,
       record,
     }),
+  );
+});
+
+test("生产 story 1.3 proposal 与 sequence 16、精确 PR head 和最终 producer 闭合", async () => {
+  const currentRecord = JSON.parse(
+    await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
+  );
+  const proposals = await loadApprovedProposals(
+    fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
+    {
+      currentRecord,
+      expectedProducerWorkflowSha: "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
+      now: Date.parse("2026-07-25T13:00:00+08:00"),
+    },
+  );
+
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].record.sequence, 17);
+  assert.equal(proposals[0].record.pullNumber, 5);
+  assert.equal(
+    proposals[0].record.headOid,
+    "22f6796dd18bed18d49f22631553d7a183da7558",
   );
 });
 
