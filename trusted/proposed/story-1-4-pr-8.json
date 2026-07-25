@@ -3,12 +3,12 @@
   "providerRepositoryId": "1303415307",
   "pullNumber": 8,
   "sequence": 18,
-  "sourceCommit": "4c071ce7074359d02103dc4503c7705988809255",
-  "headOid": "4c071ce7074359d02103dc4503c7705988809255",
+  "sourceCommit": "76fe16394c20d6d508be6ab51b6f36f293e0f928",
+  "headOid": "76fe16394c20d6d508be6ab51b6f36f293e0f928",
   "baseGateRegistryDigest": "9a4cb4adcce9c1767ce156cb0b5dc464eae2ca9cbca124caa5b7d0e770a74bd0",
   "gateRegistryDigest": "b91f8793a5edb4a1f8428c2aca88ba6ecd7b89e23a4a5af1ab72217979903a4f",
-  "gateImplementationDigest": "373c7a258c69095876b64330482ed54cb2e1bd1eb776cc4bd53a43049d58bf86",
-  "approvalEvidenceDigest": "cbf2e5bbe8be8e0ee24ca42ce65e1b4b781209d16f313cdd15d3a2d88eafb1df",
-  "effectiveAt": "2026-07-25T23:32:41+08:00",
-  "expiresAt": "2026-08-01T23:32:41+08:00"
+  "gateImplementationDigest": "d77bba165a34e6ed512fce7a7c12e85a0b8de9c1b5cdfd3f941bd80ca1b19007",
+  "approvalEvidenceDigest": "ad7e0cf00bfb5810f8ad52330fe07de4c77affd975e6a6300df906fc082fa626",
+  "effectiveAt": "2026-07-26T01:05:23+08:00",
+  "expiresAt": "2026-08-02T01:05:23+08:00"
 }
