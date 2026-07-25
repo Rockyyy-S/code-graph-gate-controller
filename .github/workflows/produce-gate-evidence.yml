@@ -38,6 +38,7 @@ jobs:
           BASE_OID: ${{ inputs.base_oid }}
           HEAD_OID: ${{ inputs.head_oid }}
           OBJECT_FORMAT: ${{ inputs.object_format }}
+          PULL_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
           PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
           REPOSITORY: ${{ inputs.repository }}
@@ -46,6 +47,7 @@ jobs:
           [[ "$BASE_OID" =~ ^[a-f0-9]{40}$ ]]
           [[ "$HEAD_OID" =~ ^[a-f0-9]{40}$ ]]
           [[ "$OBJECT_FORMAT" == "sha1" ]]
+          [[ "$PULL_NUMBER" =~ ^(0|[1-9][0-9]*)$ ]]
           [[ "$PRODUCER_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$PROVIDER_REPOSITORY_ID" == "1303415307" ]]
           [[ "$REPOSITORY" == "Rockyyy-S/code-graph" ]]
@@ -99,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: da694bce36baf82a5e839ab72fe24139f4d0a25d
+          ref: 5fe566b89322257076fe9cf5a9f181aa8e7d8fe7
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -232,6 +234,7 @@ jobs:
           BASE_OID: ${{ inputs.base_oid }}
           HEAD_OID: ${{ inputs.head_oid }}
           OBJECT_FORMAT: ${{ inputs.object_format }}
+          PULL_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
           PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
           TRUSTED_PNPM_BIN: /opt/trusted-pnpm/bin
@@ -249,6 +252,8 @@ jobs:
             --head-oid "$HEAD_OID" \
             --object-format "$OBJECT_FORMAT" \
             --provider-repository-id "$PROVIDER_REPOSITORY_ID" \
+            --proposed-record-directory "$PWD/trusted-state/trusted/proposed" \
+            --pull-number "$PULL_NUMBER" \
             --trusted-record trusted-state/trusted/registry.json \
             --workflow-file produce-gate-evidence.yml \
             --workflow-sha "$PRODUCER_WORKFLOW_SHA"

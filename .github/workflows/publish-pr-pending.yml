@@ -1,0 +1,68 @@
+name: publish-pr-lifecycle-pending
+
+on:
+  workflow_call:
+    inputs:
+      controller_workflow_sha:
+        required: true
+        type: string
+      head_oid:
+        required: true
+        type: string
+      lifecycle_action:
+        required: true
+        type: string
+      provider_repository_id:
+        required: true
+        type: string
+      pull_number:
+        required: true
+        type: number
+      repository:
+        required: true
+        type: string
+permissions:
+  contents: read
+
+jobs:
+  pending:
+    name: pending
+    environment: controller-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout immutable Controller lifecycle publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          path: trusted-controller
+          persist-credentials: false
+          ref: ${{ inputs.controller_workflow_sha }}
+          repository: Rockyyy-S/code-graph-gate-controller
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Mint Controller App installation token
+        id: controller-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.CONTROLLER_APP_ID }}
+          owner: Rockyyy-S
+          private-key: ${{ secrets.CONTROLLER_PRIVATE_KEY }}
+          repositories: code-graph
+
+      - name: Publish App-owned lifecycle pending
+        env:
+          CONTROLLER_APP_ID: ${{ secrets.CONTROLLER_APP_ID }}
+          CONTROLLER_WORKFLOW_SHA: ${{ inputs.controller_workflow_sha }}
+          GH_TOKEN: ${{ steps.controller-token.outputs.token }}
+          HEAD_OID: ${{ inputs.head_oid }}
+          LIFECYCLE_ACTION: ${{ inputs.lifecycle_action }}
+          PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
+          PULL_NUMBER: ${{ inputs.pull_number }}
+          TARGET_REPOSITORY: ${{ inputs.repository }}
+        working-directory: trusted-controller
+        run: node bin/publish-pr-pending.mjs

@@ -4,6 +4,7 @@ import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
   evaluateControllerCandidate,
   selectFreshDriftMonitorRun,
+  selectLatestWorkflowRun,
 } from "../lib/controller-policy.mjs";
 
 const workflowSha = "1".repeat(40);
@@ -89,7 +90,23 @@ test("Controller 接受完整绑定的 pass evidence", () => {
   const result = evaluateControllerCandidate(fixture);
   assert.equal(result.status, "accepted");
   assert.equal(result.conclusion, "success");
-  assert.match(result.casKey, /^1303415307:b{40}:/);
+  assert.equal(
+    result.casKey,
+    `1303415307:${"b".repeat(40)}:${fixture.artifact.evaluationContext.evaluationContextDigest}`,
+  );
+});
+
+test("umbrella CAS 只绑定 provider/head/evaluation context 三元组", () => {
+  const first = createFixture();
+  const second = createFixture();
+  second.artifact.gateImplementationDigest = "0".repeat(64);
+  second.trustedRecord.gateImplementationDigest = second.artifact.gateImplementationDigest;
+  second.trustedRecord.sequence += 1;
+
+  assert.equal(
+    evaluateControllerCandidate(first).casKey,
+    evaluateControllerCandidate(second).casKey,
+  );
 });
 
 test("Controller 不要求当前路径不适用的 blocking gate 证据", () => {
@@ -135,6 +152,36 @@ test("相同 digest 重放幂等，冲突 digest invalid", () => {
   assert.equal(evaluateControllerCandidate(conflict).status, "invalid");
 });
 
+test("Controller 拒绝未知、not-applicable 或格式错误的额外 evidence", () => {
+  const unknown = createFixture();
+  unknown.artifact.evidence.push({
+    gateEvidenceDigest: "not-a-digest",
+    gateId: "unknown",
+  });
+  assert.equal(evaluateControllerCandidate(unknown).status, "invalid");
+
+  const malformed = createFixture();
+  malformed.artifact.evidence[0].gateEvidenceDigest = "not-a-digest";
+  assert.equal(evaluateControllerCandidate(malformed).status, "invalid");
+
+  const notApplicable = createFixture();
+  notApplicable.registry.gates[0].gateDefinition.triggerPaths = ["docs/**"];
+  notApplicable.registry.gates[0].gateDefinitionDigest = sha256CanonicalJson(
+    notApplicable.registry.gates[0].gateDefinition,
+  );
+  notApplicable.trustedRecord.gateRegistryDigest = sha256CanonicalJson(
+    notApplicable.registry,
+  );
+  notApplicable.artifact.gateRegistryDigest = notApplicable.trustedRecord.gateRegistryDigest;
+  notApplicable.artifact.evaluationContext.gateRegistryDigest =
+    notApplicable.trustedRecord.gateRegistryDigest;
+  const { evaluationContextDigest: _oldDigest, ...contextInput } =
+    notApplicable.artifact.evaluationContext;
+  notApplicable.artifact.evaluationContext.evaluationContextDigest =
+    sha256CanonicalJson(contextInput);
+  assert.equal(evaluateControllerCandidate(notApplicable).status, "invalid");
+});
+
 test("拒绝旧 head、旧 registry、错误 producer 和缺失 required evidence", () => {
   const staleHead = createFixture();
   staleHead.currentProviderContext.headOid = "9".repeat(40);
@@ -149,54 +196,103 @@ test("拒绝旧 head、旧 registry、错误 producer 和缺失 required evidenc
     "Rockyyy-S",
     "attacker",
   );
-  assert.deepEqual(evaluateControllerCandidate(producerMismatch).invalidGateIds, ["unit"]);
+  assert.equal(evaluateControllerCandidate(producerMismatch).status, "invalid");
 
   const missing = createFixture();
   missing.artifact.evidence = [];
   assert.deepEqual(evaluateControllerCandidate(missing).missingEvidenceGateIds, ["unit"]);
 });
 
-test("Controller 接受最近成功的 schedule 或 workflow_dispatch monitor run", () => {
+const monitorSelection = {
+  defaultBranch: "main",
+  now: Date.parse("2026-07-23T07:00:00Z"),
+  repository: "Rockyyy-S/code-graph-gate-controller",
+  trustedHeadSha: "f".repeat(40),
+  workflowPath: ".github/workflows/drift-monitor.yml",
+};
+
+function monitorRun(overrides = {}) {
+  return {
+    conclusion: "success",
+    event: "schedule",
+    head_branch: "main",
+    head_sha: "f".repeat(40),
+    path: ".github/workflows/drift-monitor.yml",
+    repository: { full_name: "Rockyyy-S/code-graph-gate-controller" },
+    status: "completed",
+    updated_at: "2026-07-23T06:56:00Z",
+    ...overrides,
+  };
+}
+
+test("Controller 接受默认分支可信提交上的最近成功 monitor run", () => {
   const now = Date.parse("2026-07-23T07:00:00Z");
   const runs = [
-    {
-      conclusion: "success",
-      event: "schedule",
-      status: "completed",
-      updated_at: "2026-07-23T06:40:00Z",
-    },
-    {
-      conclusion: "success",
-      event: "workflow_dispatch",
-      status: "completed",
-      updated_at: "2026-07-23T06:56:00Z",
-    },
+    monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
+    monitorRun(),
   ];
-  assert.equal(selectFreshDriftMonitorRun(runs, now), runs[1]);
+  assert.equal(selectFreshDriftMonitorRun(runs, { ...monitorSelection, now }), runs[1]);
 });
 
-test("Controller 拒绝失败、过期或非可信事件的 monitor run", () => {
-  const now = Date.parse("2026-07-23T07:00:00Z");
+test("Controller 拒绝明显来自未来的 monitor 完成时间", () => {
+  assert.throws(
+    () =>
+      selectFreshDriftMonitorRun(
+        [monitorRun({ updated_at: "2026-07-24T07:00:00Z" })],
+        monitorSelection,
+      ),
+    /未来|过期|fail closed/u,
+  );
+});
+
+test("Controller 拒绝失败、过期、错误 ref/path/head 或手动 monitor run", () => {
   for (const run of [
-    {
-      conclusion: "failure",
-      event: "schedule",
-      status: "completed",
-      updated_at: "2026-07-23T06:59:00Z",
-    },
-    {
-      conclusion: "success",
-      event: "workflow_dispatch",
-      status: "completed",
-      updated_at: "2026-07-23T06:40:00Z",
-    },
-    {
-      conclusion: "success",
-      event: "push",
-      status: "completed",
-      updated_at: "2026-07-23T06:59:00Z",
-    },
+    monitorRun({ conclusion: "failure" }),
+    monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
+    monitorRun({ event: "workflow_dispatch" }),
+    monitorRun({ head_branch: "review-branch" }),
+    monitorRun({ head_sha: "0".repeat(40) }),
+    monitorRun({ path: ".github/workflows/untrusted.yml" }),
   ]) {
-    assert.throws(() => selectFreshDriftMonitorRun([run], now), /drift monitor/u);
+    assert.throws(
+      () => selectFreshDriftMonitorRun([run], monitorSelection),
+      /drift monitor/u,
+    );
   }
+});
+
+test("workflow run 先按新 run ID、再按同 run attempt 选择", () => {
+  const headOid = "b".repeat(40);
+  const newerRun = {
+    head_sha: headOid,
+    id: 20,
+    pull_requests: [{ number: 5 }],
+    run_attempt: 1,
+  };
+  const oldRerun = {
+    head_sha: headOid,
+    id: 10,
+    pull_requests: [{ number: 5 }],
+    run_attempt: 9,
+  };
+
+  assert.equal(selectLatestWorkflowRun([oldRerun, newerRun], headOid, 5), newerRun);
+});
+
+test("workflow run 必须绑定当前 PR number，不能复用相同 head 的另一 PR run", () => {
+  const headOid = "b".repeat(40);
+  const wrongPull = {
+    head_sha: headOid,
+    id: 30,
+    pull_requests: [{ number: 6 }],
+    run_attempt: 1,
+  };
+  const expectedPull = {
+    head_sha: headOid,
+    id: 20,
+    pull_requests: [{ number: 5 }],
+    run_attempt: 1,
+  };
+
+  assert.equal(selectLatestWorkflowRun([wrongPull, expectedPull], headOid, 5), expectedPull);
 });

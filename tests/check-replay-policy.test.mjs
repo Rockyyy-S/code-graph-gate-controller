@@ -108,3 +108,29 @@ test("无 CAS 的 pending 状态不参与 evidence 幂等判断", () => {
     "publish",
   );
 });
+
+test("稳定 pending CAS 与 replay digest 在 guardian 重跑时保持幂等", () => {
+  const pendingCasKey = "1303415307:head:pending:5:100:1";
+  const pendingReplayDigest = "b".repeat(64);
+  assert.equal(
+    classifyCheckReplay({
+      casKey: pendingCasKey,
+      checks: [{
+        conclusion: null,
+        id: 2,
+        output: {
+          summary: JSON.stringify({
+            casKey: pendingCasKey,
+            replayDigest: pendingReplayDigest,
+            status: "pending",
+          }),
+        },
+        status: "in_progress",
+      }],
+      conclusion: null,
+      replayDigest: pendingReplayDigest,
+      status: "in_progress",
+    }),
+    "idempotent",
+  );
+});
