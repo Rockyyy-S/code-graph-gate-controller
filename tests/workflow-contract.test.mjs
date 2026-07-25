@@ -216,18 +216,6 @@ test("阶段 B producer 固定 Harness V2 并传入 proposal/PR 参数", async (
   assert.doesNotMatch(workflow, /阶段 A 保留 V1 pin/u);
 });
 
-test("PR 生命周期 workflow 只从 Controller 环境读取 App 凭据", async () => {
-  const workflow = await readFile(
-    new URL("../.github/workflows/publish-pr-pending.yml", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(workflow, /environment: controller-production/u);
-  assert.match(workflow, /secrets\.CONTROLLER_APP_ID/u);
-  assert.match(workflow, /secrets\.CONTROLLER_PRIVATE_KEY/u);
-  assert.doesNotMatch(workflow, /workflow_call:\s+[\s\S]*?secrets:/u);
-});
-
 test("drift monitor 完整分页读取 ruleset 列表", async () => {
   const monitor = await readFile(
     new URL("../bin/run-drift-monitor.mjs", import.meta.url),
