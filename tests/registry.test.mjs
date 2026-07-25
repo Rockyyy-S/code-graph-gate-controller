@@ -217,7 +217,7 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
     {
       currentRecord,
       expectedProducerWorkflowSha: "0981130a71a3960aa374a82829d42aa9d9f15012",
-      now: Date.parse("2026-07-25T19:51:27+08:00"),
+      now: Date.parse("2026-07-25T23:33:41+08:00"),
     },
   );
 
@@ -226,7 +226,7 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
   assert.equal(proposals[0].record.pullNumber, 8);
   assert.equal(
     proposals[0].record.headOid,
-    "2515a0a68178051fe87cf305851fa386cad0db77",
+    "4c071ce7074359d02103dc4503c7705988809255",
   );
   assert.equal(
     proposals[0].record.gateRegistryDigest,
@@ -234,7 +234,7 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
-    "7c1c1440f5ca63c32656870b70ab75a20a8f4d606890fe428eaaae1a8ed64fee",
+    "373c7a258c69095876b64330482ed54cb2e1bd1eb776cc4bd53a43049d58bf86",
   );
 });
 
