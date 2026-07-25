@@ -3,7 +3,13 @@ import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import { publishControllerCheck } from "../lib/controller-check-publisher.mjs";
 import { githubJson } from "../lib/github-api.mjs";
 
-const allowedActions = new Set(["opened", "ready_for_review", "reopened", "synchronize"]);
+const allowedActions = new Set([
+  "edited",
+  "opened",
+  "ready_for_review",
+  "reopened",
+  "synchronize",
+]);
 
 /** 为受信任 pull_request_target 事件发布 Controller App 所有的 pending check。 */
 export async function publishPullLifecyclePending(input, dependencies = {}) {

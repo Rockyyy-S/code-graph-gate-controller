@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runControllerLeaseGuardian } from "../bin/run-controller-lease-guardian.mjs";
+import { ControllerRevisionDriftError } from "../bin/run-controller.mjs";
 
 test("lease guardian 在单次 cycle 失败后继续执行后续撤销轮次", async () => {
   let cycles = 0;
@@ -49,6 +50,30 @@ test("lease guardian 连续失败时向 workflow 传播最后一个撤销错误"
   } finally {
     Date.now = originalNow;
   }
+});
+
+test("默认分支可信 revision 漂移后旧 guardian 立即让位", async () => {
+  let cycles = 0;
+  let delayed = false;
+  const drift = new Error("monitor invalid", { cause: new ControllerRevisionDriftError() });
+
+  await assert.rejects(
+    runControllerLeaseGuardian({
+      delay: async () => {
+        delayed = true;
+      },
+      pollIntervalMs: 10,
+      runCycle: async () => {
+        cycles += 1;
+        throw drift;
+      },
+      runtimeMs: 25,
+    }),
+    (error) => error?.cause instanceof ControllerRevisionDriftError,
+  );
+
+  assert.equal(cycles, 1);
+  assert.equal(delayed, false);
 });
 
 test("lease guardian 使用 abort signal 约束正在执行的单轮 cycle", async () => {

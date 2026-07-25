@@ -51,6 +51,18 @@ test("PR reopen 使用 Controller App 发布稳定 architecture-required pending
   assert.equal(Object.hasOwn(fixture.posts[0], "conclusion"), false);
 });
 
+test("PR base 编辑进入与 reopen 相同的 fail-closed pending 路径", async () => {
+  const fixture = createDependencies();
+  const result = await publishPullLifecyclePending(
+    { ...input, lifecycleAction: "edited" },
+    { request: fixture.request },
+  );
+
+  assert.match(result.casKey, /:pr-lifecycle:5:edited$/u);
+  assert.equal(fixture.posts.length, 1);
+  assert.equal(fixture.posts[0].status, "in_progress");
+});
+
 test("PR 生命周期 publisher 拒绝非白名单 action 与漂移 head", async () => {
   await assert.rejects(
     publishPullLifecyclePending({ ...input, lifecycleAction: "closed" }, createDependencies()),

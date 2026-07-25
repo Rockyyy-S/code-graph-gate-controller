@@ -205,6 +205,7 @@ test("公共能力 binding 引用的专属入口、测试与 fixture 全部进�
   const fixture = await createFixture();
   context.after(() => rm(fixture.root, { force: true, recursive: true }));
   await mkdir(path.join(fixture.root, "ci"), { recursive: true });
+  await mkdir(path.join(fixture.root, "packages", "application", "src"), { recursive: true });
   await mkdir(path.join(fixture.root, "tests", "contract"), { recursive: true });
   await mkdir(path.join(fixture.root, "tests", "fixtures"), { recursive: true });
   await writeFile(
@@ -215,6 +216,10 @@ test("公共能力 binding 引用的专属入口、测试与 fixture 全部进�
           capabilityId: "rpc:graph/query",
           gateId: "graph-query-contract",
           verification: {
+            assertionTarget: {
+              exportName: "validateGraphQuery",
+              modulePath: "packages/application/src/graph-query.ts",
+            },
             entryPath: "scripts/check.mjs",
             evidenceId: "public-capability:rpc:graph/query",
             fixturePath: "tests/fixtures/graph-query.json",
@@ -224,6 +229,10 @@ test("公共能力 binding 引用的专属入口、测试与 fixture 全部进�
       ],
       schemaVersion: 1,
     }),
+  );
+  await writeFile(
+    path.join(fixture.root, "packages", "application", "src", "graph-query.ts"),
+    "export const validateGraphQuery = () => true;\n",
   );
   await writeFile(
     path.join(fixture.root, "tests", "contract", "graph-query.test.ts"),
@@ -269,6 +278,21 @@ test("公共能力 binding 引用的专属入口、测试与 fixture 全部进�
     policy,
   );
   assert.notEqual(fixtureDrift.digest, baseline.digest);
+
+  await writeFile(
+    path.join(fixture.root, "tests", "fixtures", "graph-query.json"),
+    '{"method":"graph/query"}\n',
+  );
+  await writeFile(
+    path.join(fixture.root, "packages", "application", "src", "graph-query.ts"),
+    "export const validateGraphQuery = () => false;\n",
+  );
+  const assertionTargetDrift = await computeGateImplementationDigest(
+    fixture.root,
+    fixture.registry,
+    policy,
+  );
+  assert.notEqual(assertionTargetDrift.digest, baseline.digest);
 });
 
 test("能力专属 node gate 可携带绑定测试、fixture 与 evidence 的 argv", async (context) => {

@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { runControllerCycle } from "./run-controller.mjs";
+import {
+  ControllerRevisionDriftError,
+  runControllerCycle,
+} from "./run-controller.mjs";
 
 const defaultPollIntervalMs = 60_000;
 const defaultRuntimeMs = 50 * 60 * 1000;
@@ -59,6 +62,9 @@ export async function runControllerLeaseGuardian(options = {}) {
       if (lastError instanceof ControllerCycleUnsettledError) {
         throw lastError;
       }
+      if (containsControllerRevisionDrift(lastError)) {
+        throw lastError;
+      }
     }
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
@@ -69,6 +75,22 @@ export async function runControllerLeaseGuardian(options = {}) {
   if (lastError !== null) {
     throw lastError;
   }
+}
+
+/** 默认分支已推进时立即结束旧 guardian，让排队的新可信 revision 接管。 */
+function containsControllerRevisionDrift(error, seen = new Set()) {
+  if (!(error instanceof Error) || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (error instanceof ControllerRevisionDriftError) {
+    return true;
+  }
+  if (error.cause instanceof Error && containsControllerRevisionDrift(error.cause, seen)) {
+    return true;
+  }
+  return error instanceof AggregateError &&
+    error.errors.some((nested) => containsControllerRevisionDrift(nested, seen));
 }
 
 /** 以可传播 AbortSignal 的绝对 deadline 约束单轮 Controller cycle。 */

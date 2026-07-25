@@ -51,6 +51,14 @@ class DriftMonitorInvalidError extends Error {
   }
 }
 
+/** 标记当前运行的固定 Controller SHA 已不再是默认分支尖端。 */
+export class ControllerRevisionDriftError extends Error {
+  constructor() {
+    super("Controller 默认分支 SHA 已漂移，当前 monitor 证据不可复用。");
+    this.name = "ControllerRevisionDriftError";
+  }
+}
+
 /** 执行一次 Controller 聚合；任意可信配置、provider 或验证错误都先撤销旧 success。 */
 export async function runControllerCycle(options = {}) {
   const runtime = createControllerRuntime(options);
@@ -747,7 +755,7 @@ export async function assertControllerDefaultBranchCurrent({
     { token },
   );
   if (currentCommit?.sha !== trustedSha) {
-    throw new Error("Controller 默认分支 SHA 已漂移，当前 monitor 证据不可复用。");
+    throw new ControllerRevisionDriftError();
   }
   return currentCommit;
 }
