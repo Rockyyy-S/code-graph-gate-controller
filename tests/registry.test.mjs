@@ -166,7 +166,7 @@ test("sequence=3 可信记录绑定 gate 实现摘要", () => {
   );
 });
 
-test("可信 registry sequence=16 绑定批准证据、候选提交、实现摘要和新 producer", async () => {
+test("可信 registry sequence=17 正式提升最终 Story 1.3 根", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -184,19 +184,19 @@ test("可信 registry sequence=16 绑定批准证据、候选提交、实现摘�
   );
 
   validateTrustedRegistryRecord(record);
-  assert.equal(record.sequence, 16);
-  assert.equal(record.sourceCommit, "b853937a2aae3a78a8e2b6b7ac05be4a7d7c93bf");
+  assert.equal(record.sequence, 17);
+  assert.equal(record.sourceCommit, "4e01c64e827ba5d650a2a7345d10d72b7611aa77");
   assert.equal(
     record.gateImplementationDigest,
-    "c6544b7d924c347e04e7dade8cacc908d463b2a164d015faf6f247ba4d223cec",
+    "3c32ce2afc5f32bebcb4ca4e44799dbc644c4c8e08934ef8b4cf204c70758ef2",
   );
   assert.equal(
     record.gateRegistryDigest,
-    "779bc1d3fd9a35b7f8fe15180d9f542ca7497cade97daff434f4bc91477f6e34",
+    "9a4cb4adcce9c1767ce156cb0b5dc464eae2ca9cbca124caa5b7d0e770a74bd0",
   );
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
-  assert.equal(approval.producerWorkflowSha, "78e84adecc7ef1b73a881dbd4bb6224ce7a7a769");
+  assert.equal(approval.producerWorkflowSha, "c01e7c0550b9d9150df26c20cebb10aaefdf648d");
   assert.doesNotThrow(() =>
     validateTrustedRegistryApproval({
       approval,
@@ -208,7 +208,7 @@ test("可信 registry sequence=16 绑定批准证据、候选提交、实现摘�
   );
 });
 
-test("生产 story 1.3 proposal 与 sequence 16、精确 PR head 和最终 producer 闭合", async () => {
+test("sequence 17 提升后不存在已消费的 story 1.3 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -217,17 +217,11 @@ test("生产 story 1.3 proposal 与 sequence 16、精确 PR head 和最终 produ
     {
       currentRecord,
       expectedProducerWorkflowSha: "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
-      now: Date.parse("2026-07-25T13:10:00+08:00"),
+      now: Date.parse("2026-07-25T13:11:00+08:00"),
     },
   );
 
-  assert.equal(proposals.length, 1);
-  assert.equal(proposals[0].record.sequence, 17);
-  assert.equal(proposals[0].record.pullNumber, 5);
-  assert.equal(
-    proposals[0].record.headOid,
-    "001bcafacc9e36f17f510249f15a35b6ba963c20",
-  );
+  assert.deepEqual(proposals, []);
 });
 
 test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移", async () => {
