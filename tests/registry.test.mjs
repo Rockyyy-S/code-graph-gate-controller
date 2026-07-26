@@ -208,7 +208,7 @@ test("可信 registry sequence=17 正式提升最终 Story 1.3 根", async () =>
   );
 });
 
-test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 闭合", async () => {
+test("Story 1.19 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 闭合", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -217,7 +217,7 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
     {
       currentRecord,
       expectedProducerWorkflowSha: "0981130a71a3960aa374a82829d42aa9d9f15012",
-      now: Date.parse("2026-07-26T01:16:26+08:00"),
+      now: Date.parse("2026-07-26T21:43:23+08:00"),
     },
   );
 
@@ -226,15 +226,15 @@ test("Story 1.4 proposal 与 sequence 17、PR #8 精确 head 和固定 producer 
   assert.equal(proposals[0].record.pullNumber, 8);
   assert.equal(
     proposals[0].record.headOid,
-    "6d0c84c02b68b1f6fd6859e4f7e290ffad7693dc",
+    "13e3bb7ff7ef7962c15fd16d65ec7394738d4355",
   );
   assert.equal(
     proposals[0].record.gateRegistryDigest,
-    "b91f8793a5edb4a1f8428c2aca88ba6ecd7b89e23a4a5af1ab72217979903a4f",
+    "d584077454968a04d37fc7357fb278990b5fc34f1692f1628db7b80812ea2893",
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
-    "d77bba165a34e6ed512fce7a7c12e85a0b8de9c1b5cdfd3f941bd80ca1b19007",
+    "09ada7713546528238c5ac6927026765e6100aa31a6ffdc2f28fa1b2dbdd0647",
   );
 });
 
