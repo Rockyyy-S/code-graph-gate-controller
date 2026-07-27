@@ -182,13 +182,22 @@ test("Controller attestation policy 与已提升可信根 producer SHA 保持一
 test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续撤销过期 success", async () => {
   const controllerWorkflow = await readFile(controllerWorkflowPath, "utf8");
   const monitorWorkflow = await readFile(monitorWorkflowPath, "utf8");
+  const controller = await readFile(
+    new URL("../bin/run-controller.mjs", import.meta.url),
+    "utf8",
+  );
+  const policy = await readFile(
+    new URL("../lib/controller-policy.mjs", import.meta.url),
+    "utf8",
+  );
 
   assert.match(monitorWorkflow, /push:\s*\n\s+branches: \[main\]/u);
+  assert.match(monitorWorkflow, /workflow_dispatch:\s*\n\s*schedule:/u);
   assert.match(monitorWorkflow, /cron: "2-59\/5 \* \* \* \*"/u);
   assert.match(controllerWorkflow, /cron: "4-59\/5 \* \* \* \*"/u);
   assert.match(
     controllerWorkflow,
-    /workflow_run:\s*\n\s+workflows: \["architecture-drift-monitor"\]\s*\n\s+types: \[completed\]/u,
+    /workflow_run:\s*\n\s+workflows: \["architecture-drift-monitor"\]\s*\n\s+types: \[completed\]\s*\n\s+branches: \[main\]/u,
   );
   assert.match(
     controllerWorkflow,
@@ -199,8 +208,21 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
   assert.match(controllerWorkflow, /timeout-minutes: 55/u);
   assert.match(controllerWorkflow, /ref: \$\{\{ github\.sha \}\}/u);
   assert.match(monitorWorkflow, /ref: \$\{\{ github\.sha \}\}/u);
+  assert.match(controllerWorkflow, /permissions:\s*\n\s+actions: write\s*\n\s+contents: read/u);
+  assert.match(
+    controller,
+    /actions\/workflows\/drift-monitor\.yml\/runs["`] \+\s*\n\s*`\?branch=\$\{encodeURIComponent\(controllerDefaultBranch\)\}&per_page=100`/u,
+  );
+  assert.match(controller, /actions\/workflows\/drift-monitor\.yml\/dispatches/u);
+  assert.match(controller, /body: \{ ref: controllerDefaultBranch \}/u);
+  assert.match(controller, /method: "POST"/u);
+  assert.match(controller, /token: controllerRepositoryToken/u);
+  assert.match(controller, /timeoutMs: 5_000/u);
+  assert.match(controller, /monitorRefreshState: controllerMonitorRefreshState/u);
+  assert.match(policy, /6 \* 60 \* 1000/u);
+  assert.match(policy, /15 \* 60 \* 1000/u);
   assert.doesNotMatch(controllerWorkflow, /workflow_dispatch:/u);
-  assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:/u);
+  assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:\s*\n\s+inputs:/u);
 });
 
 test("阶段 B producer 固定 Harness V2 并传入 proposal/PR 参数", async () => {

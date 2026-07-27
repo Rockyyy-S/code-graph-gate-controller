@@ -6,13 +6,14 @@ on:
   workflow_run:
     workflows: ["architecture-drift-monitor"]
     types: [completed]
+    branches: [main]
 
 concurrency:
   group: architecture-gate-controller
   cancel-in-progress: false
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 jobs:

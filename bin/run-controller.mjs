@@ -10,8 +10,9 @@ import {
 } from "../lib/attestation-policy.mjs";
 import { runBestEffort } from "../lib/best-effort.mjs";
 import {
+  DRIFT_MONITOR_REFRESH_AFTER_MS,
+  evaluateDriftMonitorLease,
   evaluateControllerCandidate,
-  selectFreshDriftMonitorRun,
   selectLatestWorkflowRun,
 } from "../lib/controller-policy.mjs";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
@@ -39,6 +40,7 @@ const driftMonitorWorkflowPath = ".github/workflows/drift-monitor.yml";
 const defaultControllerCycleTimeoutMs = 9 * 60 * 1000;
 const defaultControllerRevocationTimeoutMs = 45_000;
 const controllerRuntimeStorage = new AsyncLocalStorage();
+const controllerMonitorRefreshState = { attemptedAt: null };
 
 /** 标记必须撤销旧成功并令 workflow 失败的 monitor 无效状态。 */
 class DriftMonitorInvalidError extends Error {
@@ -720,23 +722,99 @@ async function readCandidateRegistry(headOid) {
   return JSON.parse(Buffer.from(response.content, "base64").toString("utf8"));
 }
 
+/**
+ * 在 Controller 进程内复用刷新状态，覆盖多次 success 复验与相邻 cycle 的重复触发窗口。
+ *
+ * dispatch 只改善可用性：未过期 success 可继续使用；没有 fresh success 时，即使 dispatch
+ * 已成功受理，本轮仍必须 fail closed。
+ */
+export async function assertDriftMonitorLease({
+  dispatchRefresh,
+  logError = console.error,
+  monitorRuns,
+  options,
+  refreshState,
+}) {
+  if (typeof refreshState !== "object" || refreshState === null) {
+    throw new TypeError("drift monitor refresh state 缺失。");
+  }
+  const evaluation = evaluateDriftMonitorLease(monitorRuns, options);
+  const now = options?.now ?? Date.now();
+  const refreshAgeMs = now - refreshState.attemptedAt;
+  const cooldownElapsed =
+    !Number.isFinite(refreshState.attemptedAt) ||
+    refreshAgeMs >= DRIFT_MONITOR_REFRESH_AFTER_MS ||
+    refreshAgeMs < -30_000;
+  if (evaluation.shouldRefresh && cooldownElapsed) {
+    // 先占用进程内冷却窗口，覆盖 runs API 尚未显现新运行的最终一致性间隙。
+    refreshState.attemptedAt = now;
+    const refreshPromise = attemptDriftMonitorRefresh(dispatchRefresh, logError);
+    if (evaluation.freshRun !== null) {
+      await refreshPromise;
+    }
+  }
+  if (evaluation.freshRun === null) {
+    throw new DriftMonitorInvalidError(
+      new Error("独立 drift monitor 缺失、失败、来自未来或已过期，Controller fail closed。\n"),
+    );
+  }
+  return evaluation.freshRun;
+}
+
+/** dispatch 与日志均为 best-effort，错误不能覆盖现有 fresh success。 */
+async function attemptDriftMonitorRefresh(dispatchRefresh, logError) {
+  try {
+    await dispatchRefresh();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "未知 dispatch 错误";
+    try {
+      logError(`drift monitor 预刷新 dispatch 失败，继续按现有租约判定：${reason}`);
+    } catch {
+      // 日志适配器异常不能改变 monitor lease 的安全结论。
+    }
+  }
+}
+
 /** Controller 只在独立 monitor 最近成功且未过期时发布正式结论。 */
 async function assertFreshDriftMonitor() {
   try {
     await assertControllerDefaultBranchCurrent();
     const runs = await controllerGithubJson(
-      `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs?per_page=10`,
+      `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs` +
+        `?branch=${encodeURIComponent(controllerDefaultBranch)}&per_page=100`,
       { token: controllerRepositoryToken },
     );
-    return selectFreshDriftMonitorRun(runs.workflow_runs, {
-      defaultBranch: controllerDefaultBranch,
-      repository: controllerRepository,
-      trustedHeadSha: controllerTrustedSha,
-      workflowPath: driftMonitorWorkflowPath,
+    const runtime = controllerRuntimeStorage.getStore();
+    return await assertDriftMonitorLease({
+      dispatchRefresh: dispatchDriftMonitor,
+      monitorRuns: runs.workflow_runs,
+      options: {
+        defaultBranch: controllerDefaultBranch,
+        repository: controllerRepository,
+        trustedHeadSha: controllerTrustedSha,
+        workflowPath: driftMonitorWorkflowPath,
+      },
+      refreshState: runtime?.monitorRefreshState,
     });
   } catch (error) {
+    if (error instanceof DriftMonitorInvalidError) {
+      throw error;
+    }
     throw new DriftMonitorInvalidError(error);
   }
+}
+
+/** 使用 Controller 仓库自身 token 无输入触发固定 main monitor workflow。 */
+async function dispatchDriftMonitor() {
+  return controllerGithubJson(
+    `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/dispatches`,
+    {
+      body: { ref: controllerDefaultBranch },
+      method: "POST",
+      token: controllerRepositoryToken,
+      timeoutMs: 5_000,
+    },
+  );
 }
 
 /** monitor 证据只信任仍位于 Controller 默认分支尖端的固定部署 SHA。 */
@@ -840,7 +918,11 @@ function createControllerRuntime(options) {
   if (!Number.isFinite(deadlineAt) || deadlineAt <= Date.now()) {
     throw new Error("Controller cycle deadline 缺失或已耗尽。");
   }
-  return { deadlineAt, signal: options.signal };
+  return {
+    deadlineAt,
+    monitorRefreshState: controllerMonitorRefreshState,
+    signal: options.signal,
+  };
 }
 
 /** 创建与正常 cycle signal 隔离的紧急撤销 runtime。 */

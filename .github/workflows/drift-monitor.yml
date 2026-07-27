@@ -3,6 +3,7 @@ name: architecture-drift-monitor
 on:
   push:
     branches: [main]
+  workflow_dispatch:
   schedule:
     - cron: "2-59/5 * * * *"
 

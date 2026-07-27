@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
+  evaluateDriftMonitorLease,
   evaluateControllerCandidate,
   selectFreshDriftMonitorRun,
   selectLatestWorkflowRun,
@@ -217,8 +218,10 @@ function monitorRun(overrides = {}) {
     event: "schedule",
     head_branch: "main",
     head_sha: "f".repeat(40),
+    id: 1,
     path: ".github/workflows/drift-monitor.yml",
     repository: { full_name: "Rockyyy-S/code-graph-gate-controller" },
+    run_attempt: 1,
     status: "completed",
     updated_at: "2026-07-23T06:56:00Z",
     ...overrides,
@@ -239,6 +242,13 @@ test("Controller 接受默认分支可信提交上的最近成功 monitor run", 
     }).event,
     "push",
   );
+  assert.equal(
+    selectFreshDriftMonitorRun([monitorRun({ event: "workflow_dispatch" })], {
+      ...monitorSelection,
+      now,
+    }).event,
+    "workflow_dispatch",
+  );
 });
 
 test("Controller 拒绝明显来自未来的 monitor 完成时间", () => {
@@ -252,11 +262,11 @@ test("Controller 拒绝明显来自未来的 monitor 完成时间", () => {
   );
 });
 
-test("Controller 拒绝失败、过期、错误 ref/path/head 或手动 monitor run", () => {
+test("Controller 拒绝失败、过期或错误 repo/ref/path/head 的 monitor run", () => {
   for (const run of [
     monitorRun({ conclusion: "failure" }),
     monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
-    monitorRun({ event: "workflow_dispatch" }),
+    monitorRun({ repository: { full_name: "attacker/controller" } }),
     monitorRun({ head_branch: "review-branch" }),
     monitorRun({ head_sha: "0".repeat(40) }),
     monitorRun({ path: ".github/workflows/untrusted.yml" }),
@@ -265,6 +275,161 @@ test("Controller 拒绝失败、过期、错误 ref/path/head 或手动 monitor 
       () => selectFreshDriftMonitorRun([run], monitorSelection),
       /drift monitor/u,
     );
+  }
+});
+
+test("monitor lease 在精确 6 分钟预刷新，并在精确 15 分钟硬过期", () => {
+  const beforeRefresh = evaluateDriftMonitorLease(
+    [monitorRun({ updated_at: "2026-07-23T06:54:00.001Z" })],
+    monitorSelection,
+  );
+  assert.equal(beforeRefresh.shouldRefresh, false);
+  assert.ok(beforeRefresh.freshRun);
+
+  const atRefresh = evaluateDriftMonitorLease(
+    [monitorRun({ updated_at: "2026-07-23T06:54:00.000Z" })],
+    monitorSelection,
+  );
+  assert.equal(atRefresh.shouldRefresh, true);
+  assert.ok(atRefresh.freshRun);
+
+  const atExpiry = evaluateDriftMonitorLease(
+    [monitorRun({ updated_at: "2026-07-23T06:45:00.000Z" })],
+    monitorSelection,
+  );
+  assert.equal(atExpiry.freshRun, null);
+  assert.equal(atExpiry.shouldRefresh, true);
+  assert.throws(
+    () => selectFreshDriftMonitorRun(
+      [monitorRun({ updated_at: "2026-07-23T06:45:00.000Z" })],
+      monitorSelection,
+    ),
+    /drift monitor/u,
+  );
+});
+
+test("可信 active monitor 抑制重复刷新，但不能替代 completed success", () => {
+  const fresh = monitorRun({ updated_at: "2026-07-23T06:54:00Z" });
+  const active = monitorRun({
+    conclusion: null,
+    event: "workflow_dispatch",
+    id: 2,
+    status: "queued",
+    updated_at: "2026-07-23T06:59:00Z",
+  });
+  const evaluation = evaluateDriftMonitorLease([fresh, active], monitorSelection);
+
+  assert.equal(evaluation.freshRun, fresh);
+  assert.equal(evaluation.activeRun, active);
+  assert.equal(evaluation.shouldRefresh, false);
+
+  const staleEvaluation = evaluateDriftMonitorLease([
+    monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
+    active,
+  ], monitorSelection);
+  assert.equal(staleEvaluation.freshRun, null);
+  assert.equal(staleEvaluation.activeRun, active);
+  assert.equal(staleEvaluation.shouldRefresh, false);
+});
+
+test("requested、waiting、pending 状态同样抑制重复刷新", () => {
+  for (const status of ["requested", "waiting", "pending"]) {
+    const active = monitorRun({
+      conclusion: null,
+      event: "workflow_dispatch",
+      id: 2,
+      status,
+      updated_at: "2026-07-23T06:59:00Z",
+    });
+    const evaluation = evaluateDriftMonitorLease([
+      monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
+      active,
+    ], monitorSelection);
+
+    assert.equal(evaluation.activeRun, active);
+    assert.equal(evaluation.shouldRefresh, false);
+  }
+});
+
+test("过期或时间非法的 active run 不能永久抑制恢复", () => {
+  for (const updated_at of ["2026-07-23T06:45:00Z", "not-a-date"]) {
+    const evaluation = evaluateDriftMonitorLease([
+      monitorRun({ updated_at: "2026-07-23T06:40:00Z" }),
+      monitorRun({
+        conclusion: null,
+        event: "workflow_dispatch",
+        id: 2,
+        status: "in_progress",
+        updated_at,
+      }),
+    ], monitorSelection);
+
+    assert.equal(evaluation.activeRun, null);
+    assert.equal(evaluation.shouldRefresh, true);
+  }
+});
+
+test("失败的 workflow_dispatch 在六分钟内退避，随后允许恢复", () => {
+  const failedDispatch = monitorRun({
+    conclusion: "failure",
+    event: "workflow_dispatch",
+    updated_at: "2026-07-23T06:54:00.001Z",
+  });
+  const coolingDown = evaluateDriftMonitorLease([failedDispatch], monitorSelection);
+  assert.equal(coolingDown.freshRun, null);
+  assert.equal(coolingDown.shouldRefresh, false);
+
+  const retryable = evaluateDriftMonitorLease([
+    { ...failedDispatch, updated_at: "2026-07-23T06:54:00.000Z" },
+  ], monitorSelection);
+  assert.equal(retryable.shouldRefresh, true);
+});
+
+test("较新 failure 否决旧 success，同秒时按 run ID 与 attempt 破除平局", () => {
+  const oldSuccess = monitorRun({ id: 1, updated_at: "2026-07-23T06:56:00Z" });
+  const newerFailure = monitorRun({
+    conclusion: "failure",
+    id: 2,
+    updated_at: "2026-07-23T06:57:00Z",
+  });
+  assert.equal(
+    evaluateDriftMonitorLease([oldSuccess, newerFailure], monitorSelection).freshRun,
+    null,
+  );
+
+  const tiedFailure = monitorRun({
+    conclusion: "failure",
+    id: 3,
+    updated_at: oldSuccess.updated_at,
+  });
+  assert.equal(
+    evaluateDriftMonitorLease([oldSuccess, tiedFailure], monitorSelection).latestCompletedRun,
+    tiedFailure,
+  );
+
+  const tiedAttempt = monitorRun({
+    conclusion: "failure",
+    id: oldSuccess.id,
+    run_attempt: 2,
+    updated_at: oldSuccess.updated_at,
+  });
+  assert.equal(
+    evaluateDriftMonitorLease([oldSuccess, tiedAttempt], monitorSelection).latestCompletedRun,
+    tiedAttempt,
+  );
+});
+
+test("非可信 active run 不能抑制 monitor 刷新", () => {
+  const stale = monitorRun({ updated_at: "2026-07-23T06:40:00Z" });
+  for (const active of [
+    monitorRun({ conclusion: null, id: 2, status: "queued", head_sha: "0".repeat(40) }),
+    monitorRun({ conclusion: null, id: 3, status: "in_progress", head_branch: "review" }),
+    monitorRun({ conclusion: "success", id: 4, status: "queued" }),
+    monitorRun({ conclusion: null, event: "repository_dispatch", id: 5, status: "queued" }),
+  ]) {
+    const evaluation = evaluateDriftMonitorLease([stale, active], monitorSelection);
+    assert.equal(evaluation.activeRun, null);
+    assert.equal(evaluation.shouldRefresh, true);
   }
 });
 

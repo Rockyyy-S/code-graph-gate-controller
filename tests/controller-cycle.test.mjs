@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertDriftMonitorLease,
   assertControllerDefaultBranchCurrent,
   assertPullOwnsUniqueOpenHead,
   assertUniqueOpenPullHeads,
@@ -12,6 +13,30 @@ import {
   samePullIdentity,
   sameWorkflowRunIdentity,
 } from "../bin/run-controller.mjs";
+
+const monitorOptions = {
+  defaultBranch: "main",
+  now: Date.parse("2026-07-23T07:00:00Z"),
+  repository: "Rockyyy-S/code-graph-gate-controller",
+  trustedHeadSha: "f".repeat(40),
+  workflowPath: ".github/workflows/drift-monitor.yml",
+};
+
+/** 创建与 Controller 可信 monitor 身份闭合的测试运行。 */
+function monitorRun(overrides = {}) {
+  return {
+    conclusion: "success",
+    event: "schedule",
+    head_branch: "main",
+    head_sha: "f".repeat(40),
+    id: 1,
+    path: ".github/workflows/drift-monitor.yml",
+    repository: { full_name: "Rockyyy-S/code-graph-gate-controller" },
+    status: "completed",
+    updated_at: "2026-07-23T06:54:00Z",
+    ...overrides,
+  };
+}
 
 /** 创建可观察全局撤销调用的 Controller cycle 依赖。 */
 function createDependencies(overrides = {}) {
@@ -183,6 +208,138 @@ test("monitor freshness 先绑定 Controller 默认分支当前 SHA", async () =
     }),
     /默认分支|可信.*SHA|漂移/u,
   );
+});
+
+test("monitor 进入预刷新窗口时同一 cycle 只 dispatch 一次", async () => {
+  const refreshState = { attemptedAt: null };
+  let dispatches = 0;
+  const options = {
+    dispatchRefresh: async () => {
+      dispatches += 1;
+    },
+    monitorRuns: [monitorRun()],
+    options: monitorOptions,
+    refreshState,
+  };
+
+  await assertDriftMonitorLease(options);
+  await assertDriftMonitorLease(options);
+
+  assert.equal(dispatches, 1);
+});
+
+test("新鲜或已有可信 active monitor 时不 dispatch", async () => {
+  let dispatches = 0;
+  const dispatchRefresh = async () => {
+    dispatches += 1;
+  };
+  await assertDriftMonitorLease({
+    dispatchRefresh,
+    monitorRuns: [monitorRun({ updated_at: "2026-07-23T06:54:00.001Z" })],
+    options: monitorOptions,
+    refreshState: { attemptedAt: null },
+  });
+
+  await assert.rejects(
+    assertDriftMonitorLease({
+      dispatchRefresh,
+      monitorRuns: [
+        monitorRun({ updated_at: "2026-07-23T06:45:00Z" }),
+        monitorRun({
+          conclusion: null,
+          event: "workflow_dispatch",
+          id: 2,
+          status: "in_progress",
+          updated_at: "2026-07-23T06:59:00Z",
+        }),
+      ],
+      options: monitorOptions,
+      refreshState: { attemptedAt: null },
+    }),
+    /drift monitor|fail closed/u,
+  );
+
+  assert.equal(dispatches, 0);
+});
+
+test("未过期 monitor 的 dispatch 失败只记录并继续复用 success", async () => {
+  const errors = [];
+  const freshRun = monitorRun();
+  const selected = await assertDriftMonitorLease({
+    dispatchRefresh: async () => {
+      throw new Error("dispatch unavailable");
+    },
+    logError: (message) => errors.push(message),
+    monitorRuns: [freshRun],
+    options: monitorOptions,
+    refreshState: { attemptedAt: null },
+  });
+
+  assert.equal(selected, freshRun);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /dispatch unavailable/u);
+});
+
+test("过期 monitor 即使 dispatch 成功也继续 fail closed", async () => {
+  let dispatches = 0;
+  await assert.rejects(
+    assertDriftMonitorLease({
+      dispatchRefresh: async () => {
+        dispatches += 1;
+      },
+      monitorRuns: [monitorRun({ updated_at: "2026-07-23T06:45:00Z" })],
+      options: monitorOptions,
+      refreshState: { attemptedAt: null },
+    }),
+    /drift monitor|fail closed/u,
+  );
+  assert.equal(dispatches, 1);
+});
+
+test("进程内六分钟冷却覆盖 runs API 最终一致性间隙", async () => {
+  const refreshState = { attemptedAt: null };
+  let dispatches = 0;
+  const dispatchRefresh = async () => {
+    dispatches += 1;
+  };
+
+  await assertDriftMonitorLease({
+    dispatchRefresh,
+    monitorRuns: [monitorRun()],
+    options: monitorOptions,
+    refreshState,
+  });
+  await assertDriftMonitorLease({
+    dispatchRefresh,
+    monitorRuns: [monitorRun()],
+    options: { ...monitorOptions, now: monitorOptions.now + 5 * 60 * 1000 },
+    refreshState,
+  });
+  await assertDriftMonitorLease({
+    dispatchRefresh,
+    monitorRuns: [monitorRun()],
+    options: { ...monitorOptions, now: monitorOptions.now + 6 * 60 * 1000 },
+    refreshState,
+  });
+
+  assert.equal(dispatches, 2);
+});
+
+test("日志适配器失败不能覆盖仍有效的 monitor success", async () => {
+  const freshRun = monitorRun();
+  const selected = await assertDriftMonitorLease({
+    dispatchRefresh: async () => {
+      throw new Error("dispatch unavailable");
+    },
+    logError: () => {
+      throw new Error("logger unavailable");
+    },
+    monitorRuns: [freshRun],
+    options: monitorOptions,
+    refreshState: { attemptedAt: null },
+  });
+
+  assert.equal(selected, freshRun);
 });
 
 test("success 后复验失败时先撤销绿色再传播原错误", async () => {
