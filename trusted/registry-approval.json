@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "approvalKind": "gate-trust-root-migration",
   "approvedBy": "Rockyyy-S",
-  "approvedAt": "2026-07-25T13:09:00+08:00",
+  "approvedAt": "2026-07-27T10:57:20+08:00",
   "providerRepositoryId": "1303415307",
-  "sequence": 17,
-  "sourceCommit": "4e01c64e827ba5d650a2a7345d10d72b7611aa77",
-  "previousGateImplementationDigest": "c6544b7d924c347e04e7dade8cacc908d463b2a164d015faf6f247ba4d223cec",
-  "gateImplementationDigest": "3c32ce2afc5f32bebcb4ca4e44799dbc644c4c8e08934ef8b4cf204c70758ef2",
-  "previousGateRegistryDigest": "779bc1d3fd9a35b7f8fe15180d9f542ca7497cade97daff434f4bc91477f6e34",
-  "gateRegistryDigest": "9a4cb4adcce9c1767ce156cb0b5dc464eae2ca9cbca124caa5b7d0e770a74bd0",
-  "previousProducerWorkflowSha": "78e84adecc7ef1b73a881dbd4bb6224ce7a7a769",
-  "producerWorkflowSha": "c01e7c0550b9d9150df26c20cebb10aaefdf648d"
+  "sequence": 18,
+  "sourceCommit": "86bd1338d333cedbb0aab19508c786915175eab7",
+  "previousGateImplementationDigest": "3c32ce2afc5f32bebcb4ca4e44799dbc644c4c8e08934ef8b4cf204c70758ef2",
+  "gateImplementationDigest": "3f8a9d3f95904cece88ecaa77933115af113fbbaff3a514946b2fc15a7750d3c",
+  "previousGateRegistryDigest": "9a4cb4adcce9c1767ce156cb0b5dc464eae2ca9cbca124caa5b7d0e770a74bd0",
+  "gateRegistryDigest": "d584077454968a04d37fc7357fb278990b5fc34f1692f1628db7b80812ea2893",
+  "previousProducerWorkflowSha": "c01e7c0550b9d9150df26c20cebb10aaefdf648d",
+  "producerWorkflowSha": "0981130a71a3960aa374a82829d42aa9d9f15012"
 }

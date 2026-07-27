@@ -138,12 +138,9 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /env -i HOME=/u);
 });
 
-test("Controller attestation policy 与当前 Story 1.19 proposal producer SHA 保持一致", async () => {
+test("Controller attestation policy 与已提升可信根 producer SHA 保持一致", async () => {
   const approval = JSON.parse(
-    await readFile(
-      new URL("../trusted/proposed/story-1-4-pr-8.approval.json", import.meta.url),
-      "utf8",
-    ),
+    await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
   const controller = await readFile(
     new URL("../bin/run-controller.mjs", import.meta.url),
