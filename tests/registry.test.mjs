@@ -166,7 +166,7 @@ test("sequence=3 可信记录绑定 gate 实现摘要", () => {
   );
 });
 
-test("可信 registry sequence=19 正式提升 CR2-009 Win32 producer 根", async () => {
+test("可信 registry sequence=20 正式提升 Win32 host identity attempt 7 根", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -184,19 +184,19 @@ test("可信 registry sequence=19 正式提升 CR2-009 Win32 producer 根", asyn
   );
 
   validateTrustedRegistryRecord(record);
-  assert.equal(record.sequence, 19);
-  assert.equal(record.sourceCommit, "895dbe748e5188b641ef790d876dfedc713083a1");
+  assert.equal(record.sequence, 20);
+  assert.equal(record.sourceCommit, "4783a74c93fa340140e1d5256305e70e318c9d40");
   assert.equal(
     record.gateImplementationDigest,
-    "6c669bace5d4dcd650e5e8b142ad3bf04f56ffd1314cb74c2743dabf8ac231d3",
+    "f923538904dcb7595c117e61bf269868770745121902b4b55a3cfe45d8b626d6",
   );
   assert.equal(
     record.gateRegistryDigest,
-    "7b0bb2e25fabbbd9d723a43d8b6ef85fd454fd21a48f257b34bbe8e449c38088",
+    "820f8875058074206f125beb6c6c99dc9b6460efbdfea77a79910bc95ef9a190",
   );
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
-  assert.equal(approval.producerWorkflowSha, "1576f74da9e4985502c4baef95c21113900db456");
+  assert.equal(approval.producerWorkflowSha, "8dbdc4ae46fce6f6a73700ab4d35b7c67907e64f");
   assert.doesNotThrow(() =>
     validateTrustedRegistryApproval({
       approval,
@@ -208,7 +208,7 @@ test("可信 registry sequence=19 正式提升 CR2-009 Win32 producer 根", asyn
   );
 });
 
-test("sequence 19 提升后不存在已消费的 CR2-009 proposal", async () => {
+test("sequence 20 提升后不存在已消费的 attempt 7 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -216,8 +216,8 @@ test("sequence 19 提升后不存在已消费的 CR2-009 proposal", async () => 
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
       currentRecord,
-      expectedProducerWorkflowSha: "1576f74da9e4985502c4baef95c21113900db456",
-      now: Date.parse("2026-07-29T22:05:25+08:00"),
+      expectedProducerWorkflowSha: "8dbdc4ae46fce6f6a73700ab4d35b7c67907e64f",
+      now: Date.parse("2026-07-30T00:32:28+08:00"),
     },
   );
 

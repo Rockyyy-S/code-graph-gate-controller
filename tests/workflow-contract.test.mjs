@@ -10,10 +10,13 @@ import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "e28f0573407912657db2a16ad1a8b8e8a9479ab0";
+const trustedHarnessSha = "807c28187ae471c27aeea2f26a254fbe1e7fd691";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 const pnpmWin32ArchiveSha256 =
   "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";
+const pnpmWin32EntrySha256 =
+  "0a8b6b9d6f391bb83e868a3f951eec74fb8f745c176fce523a9359f40b20fb7b";
+const pnpmWin32EntrySize = 98099528;
 const betterSqliteIntegrity =
   "sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==";
 
@@ -179,8 +182,20 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.doesNotMatch(win32Job, /--gate-(?:uid|gid)/u);
   assert.match(win32Job, /pnpm-win32-x64\.zip/u);
   assert.match(win32Job, new RegExp(`PNPM_ARCHIVE_SHA256: ${pnpmWin32ArchiveSha256}`, "u"));
+  assert.match(win32Job, new RegExp(`PNPM_ENTRY_SHA256: ${pnpmWin32EntrySha256}`, "u"));
+  assert.match(win32Job, new RegExp(`PNPM_ENTRY_SIZE: '${pnpmWin32EntrySize}'`, "u"));
   assert.match(win32Job, /Get-FileHash -Algorithm SHA256/u);
-  assert.match(win32Job, /Expand-Archive -LiteralPath \$archive/u);
+  assert.match(
+    win32Job,
+    /node trusted-harness\/bin\/install-trusted-pnpm-win32\.mjs --archive \$archive --trusted-root \$trustedRoot/u,
+  );
+  assert.match(win32Job, /TRUSTED_PNPM_EXE=\$trustedPnpm/u);
+  assert.match(win32Job, /\$trustedItem\.Length -ne \[int64\]\$env:PNPM_ENTRY_SIZE/u);
+  assert.match(win32Job, /\$actualEntrySha -ne \$env:PNPM_ENTRY_SHA256/u);
+  assert.match(win32Job, /\$trustedPnpm = \$env:TRUSTED_PNPM_EXE/u);
+  assert.match(win32Job, /\[IO\.Path\]::IsPathFullyQualified\(\$trustedPnpm\)/u);
+  assert.doesNotMatch(win32Job, /Expand-Archive|GITHUB_PATH|TRUSTED_PNPM_BIN/u);
+  assert.doesNotMatch(win32Job, /^\s*(?:&\s*)?pnpm(?:\.exe)?\s/mu);
   assert.match(
     win32Job,
     /install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,

@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
+          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -356,7 +356,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
+          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -386,10 +386,11 @@ jobs:
         env:
           PNPM_ARCHIVE_SHA256: 7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b # pnpm v11.12.0 官方 Win32 x64 release asset 摘要
           PNPM_ARCHIVE_URL: https://github.com/pnpm/pnpm/releases/download/v11.12.0/pnpm-win32-x64.zip
+          PNPM_ENTRY_SHA256: 0a8b6b9d6f391bb83e868a3f951eec74fb8f745c176fce523a9359f40b20fb7b
+          PNPM_ENTRY_SIZE: '98099528'
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'pnpm-win32-x64-11.12.0.zip'
-          $staging = Join-Path $env:RUNNER_TEMP ("pnpm-11.12.0-{0}" -f ([guid]::NewGuid().ToString('N')))
           $trustedRoot = Join-Path $env:RUNNER_TEMP 'trusted-pnpm'
           try {
             curl.exe --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --retry 3 --show-error --silent --output $archive $env:PNPM_ARCHIVE_URL
@@ -397,41 +398,31 @@ jobs:
             $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
             if ($actualArchiveSha -ne $env:PNPM_ARCHIVE_SHA256) { throw 'pnpm Win32 release 摘要不匹配。' }
 
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
-            try {
-              $files = @($zip.Entries | Where-Object { $_.Name.Length -gt 0 })
-              if ($files.Count -ne 1 -or $files[0].FullName -ne 'pnpm.exe') {
-                throw 'pnpm Win32 release 必须只包含根目录 pnpm.exe。'
-              }
-            } finally {
-              $zip.Dispose()
-            }
-
-            New-Item -ItemType Directory -Path $staging | Out-Null
-            Expand-Archive -LiteralPath $archive -DestinationPath $staging
-            $sourcePnpm = Join-Path $staging 'pnpm.exe'
-            $sourceItem = Get-Item -LiteralPath $sourcePnpm
-            if (-not $sourceItem.Exists -or $sourceItem.Length -le 0 -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-              throw 'pnpm.exe 不是有效的普通文件。'
-            }
-            New-Item -ItemType Directory -Path $trustedRoot | Out-Null
+            & node trusted-harness/bin/install-trusted-pnpm-win32.mjs --archive $archive --trusted-root $trustedRoot
+            if ($LASTEXITCODE -ne 0) { throw 'pnpm Win32 安全安装失败。' }
             $trustedPnpm = Join-Path $trustedRoot 'pnpm.exe'
-            Copy-Item -LiteralPath $sourcePnpm -Destination $trustedPnpm
-            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePnpm).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $trustedPnpm).Hash) {
-              throw 'pnpm.exe 复制后摘要漂移。'
+            $trustedItem = Get-Item -LiteralPath $trustedPnpm
+            if (
+              -not $trustedItem.Exists -or
+              $trustedItem.Length -ne [int64]$env:PNPM_ENTRY_SIZE -or
+              ($trustedItem.Attributes -band [IO.FileAttributes]::ReparsePoint)
+            ) {
+              throw 'pnpm.exe 不是固定大小的普通文件。'
             }
-            "TRUSTED_PNPM_BIN=$trustedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            $trustedRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $actualEntrySha = (Get-FileHash -Algorithm SHA256 -LiteralPath $trustedPnpm).Hash.ToLowerInvariant()
+            if ($actualEntrySha -ne $env:PNPM_ENTRY_SHA256) { throw 'pnpm.exe 固定摘要不匹配。' }
+            $pnpmVersion = & $trustedPnpm --version
+            if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm 版本无效。' }
+            "TRUSTED_PNPM_EXE=$trustedPnpm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           } finally {
             Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $staging -Force -Recurse -ErrorAction SilentlyContinue
           }
 
       - name: Install frozen dependencies without candidate lifecycle
         shell: pwsh
         run: |
-          $trustedPnpm = Join-Path $env:TRUSTED_PNPM_BIN 'pnpm.exe'
+          $trustedPnpm = $env:TRUSTED_PNPM_EXE
+          if (-not [IO.Path]::IsPathFullyQualified($trustedPnpm)) { throw '可信 pnpm 路径不是绝对路径。' }
           $pnpmVersion = & $trustedPnpm --version
           if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm 版本无效。' }
           $candidateRoot = (Resolve-Path -LiteralPath 'candidate').Path
@@ -518,7 +509,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
+          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Download portable unsigned evidence into a clean runner
