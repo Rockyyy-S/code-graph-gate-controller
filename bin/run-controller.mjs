@@ -31,7 +31,7 @@ import {
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
 const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
-const producerWorkflowSha = "0981130a71a3960aa374a82829d42aa9d9f15012";
+const producerWorkflowSha = "1576f74da9e4985502c4baef95c21113900db456";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
 const controllerTrustedSha = process.env.CONTROLLER_TRUSTED_SHA;
