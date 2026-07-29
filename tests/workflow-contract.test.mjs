@@ -169,6 +169,12 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.doesNotMatch(portableJob, /--execution-partition win32/u);
   assert.match(win32Job, /runs-on:\s*windows-latest/u);
   assert.match(win32Job, /shell:\s*pwsh/u);
+  assert.ok(
+    win32Job.indexOf("Enforce byte-exact LF checkout") <
+      win32Job.indexOf("Checkout immutable GateHarness"),
+  );
+  assert.match(win32Job, /git config --global core\.autocrlf false/u);
+  assert.match(win32Job, /git config --global core\.eol lf/u);
   assert.match(win32Job, /--execution-partition', 'win32'/u);
   assert.doesNotMatch(win32Job, /--gate-(?:uid|gid)/u);
   assert.match(win32Job, /pnpm-win32-x64\.zip/u);

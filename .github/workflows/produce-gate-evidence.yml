@@ -342,6 +342,14 @@ jobs:
           if ($env:PROVIDER_REPOSITORY_ID -ne '1303415307') { throw 'provider repository id 无效。' }
           if ($env:REPOSITORY -ne 'Rockyyy-S/code-graph') { throw 'provider repository 无效。' }
 
+      - name: Enforce byte-exact LF checkout
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          if ((git config --global --get core.autocrlf) -ne 'false') { throw 'core.autocrlf 未锁定为 false。' }
+          if ((git config --global --get core.eol) -ne 'lf') { throw 'core.eol 未锁定为 lf。' }
+
       - name: Checkout immutable GateHarness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
         with:
