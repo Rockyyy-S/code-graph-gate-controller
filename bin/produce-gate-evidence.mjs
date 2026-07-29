@@ -1,17 +1,19 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { produceGateEvidence } from "../lib/harness.mjs";
+import {
+  mergeGateEvidenceArtifacts,
+  produceGateEvidence,
+} from "../lib/harness.mjs";
 
-/** GateHarness V2 的封闭 CLI 参数合同；producer 必须与不可变 Harness SHA 同步升级。 */
-export const GATE_HARNESS_ARGUMENT_NAMES_V2 = Object.freeze([
+/** GateHarness V3 的跨平台公共参数合同。 */
+export const GATE_HARNESS_COMMON_ARGUMENT_NAMES_V3 = Object.freeze([
   "--artifact-directory",
   "--base-oid",
   "--candidate-root",
   "--controller-repository",
-  "--gate-gid",
+  "--execution-partition",
   "--gate-home",
   "--gate-temp-directory",
-  "--gate-uid",
   "--head-oid",
   "--object-format",
   "--provider-repository-id",
@@ -22,20 +24,35 @@ export const GATE_HARNESS_ARGUMENT_NAMES_V2 = Object.freeze([
   "--workflow-sha",
 ]);
 
+/** Portable 分区额外要求专用 UID/GID；Win32 分区显式禁止伪造该 Unix identity。 */
+export const GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3 = Object.freeze([
+  ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V3,
+  "--gate-gid",
+  "--gate-uid",
+].sort());
+export const GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3 = Object.freeze([
+  ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V3,
+].sort());
+
+/** 合并命令只接受绝对输出目录与 JSON 编码的绝对输入路径数组。 */
+export const GATE_EVIDENCE_MERGE_ARGUMENT_NAMES_V1 = Object.freeze([
+  "--artifact-directory",
+  "--input-artifacts-json",
+]);
+
 /** 将成对 CLI 参数解析为封闭选项对象。 */
 export function parseArguments(argv) {
-  const values = new Map();
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (!key?.startsWith("--") || value === undefined || values.has(key)) {
-      throw new Error("GateHarness 参数必须是唯一的 --key value 对。\n");
-    }
-    values.set(key, value);
-  }
+  const values = parsePairs(argv, "GateHarness");
+  const executionPartition = values.get("--execution-partition");
+  const expectedNames = executionPartition === "portable"
+    ? GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3
+    : executionPartition === "win32"
+      ? GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3
+      : null;
   if (
-    values.size !== GATE_HARNESS_ARGUMENT_NAMES_V2.length ||
-    GATE_HARNESS_ARGUMENT_NAMES_V2.some((key) => !values.has(key))
+    expectedNames === null ||
+    values.size !== expectedNames.length ||
+    expectedNames.some((key) => !values.has(key))
   ) {
     throw new Error("GateHarness 参数缺失或包含未知字段。\n");
   }
@@ -44,10 +61,15 @@ export function parseArguments(argv) {
     baseOid: values.get("--base-oid"),
     candidateRoot: path.resolve(values.get("--candidate-root")),
     controllerRepository: values.get("--controller-repository"),
-    gateGid: parsePositiveInteger(values.get("--gate-gid"), "--gate-gid"),
+    executionPartition,
+    gateGid: executionPartition === "portable"
+      ? parsePositiveInteger(values.get("--gate-gid"), "--gate-gid")
+      : undefined,
     gateHome: path.resolve(values.get("--gate-home")),
     gateTempDirectory: path.resolve(values.get("--gate-temp-directory")),
-    gateUid: parsePositiveInteger(values.get("--gate-uid"), "--gate-uid"),
+    gateUid: executionPartition === "portable"
+      ? parsePositiveInteger(values.get("--gate-uid"), "--gate-uid")
+      : undefined,
     headOid: values.get("--head-oid"),
     objectFormat: values.get("--object-format"),
     providerRepositoryId: values.get("--provider-repository-id"),
@@ -60,6 +82,50 @@ export function parseArguments(argv) {
     workflowFile: values.get("--workflow-file"),
     workflowSha: values.get("--workflow-sha"),
   };
+}
+
+/** 将两个平台的分区 artifact 参数解析为封闭合并选项。 */
+export function parseMergeArguments(argv) {
+  const values = parsePairs(argv, "GateHarness 合并");
+  if (
+    values.size !== GATE_EVIDENCE_MERGE_ARGUMENT_NAMES_V1.length ||
+    GATE_EVIDENCE_MERGE_ARGUMENT_NAMES_V1.some((key) => !values.has(key))
+  ) {
+    throw new Error("GateHarness 合并参数缺失或包含未知字段。\n");
+  }
+  let artifactPaths;
+  try {
+    artifactPaths = JSON.parse(values.get("--input-artifacts-json"));
+  } catch {
+    throw new Error("--input-artifacts-json 必须是 JSON 数组。");
+  }
+  if (
+    !Array.isArray(artifactPaths) ||
+    artifactPaths.length < 2 ||
+    artifactPaths.some((artifactPath) =>
+      typeof artifactPath !== "string" || !path.isAbsolute(artifactPath)
+    )
+  ) {
+    throw new Error("--input-artifacts-json 必须包含至少两个绝对路径。");
+  }
+  return {
+    artifactDirectory: path.resolve(values.get("--artifact-directory")),
+    artifactPaths: artifactPaths.map((artifactPath) => path.normalize(artifactPath)),
+  };
+}
+
+/** 将成对 CLI 参数解析为唯一键值映射。 */
+function parsePairs(argv, label) {
+  const values = new Map();
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith("--") || value === undefined || values.has(key)) {
+      throw new Error(`${label} 参数必须是唯一的 --key value 对。\n`);
+    }
+    values.set(key, value);
+  }
+  return values;
 }
 
 /** proposed 可信状态目录必须由 producer 传入绝对路径，禁止隐式依赖 cwd。 */
@@ -96,15 +162,25 @@ function parsePositiveInteger(value, name) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    const result = await produceGateEvidence(parseArguments(process.argv.slice(2)));
-    console.log(
-      JSON.stringify({
+    const argv = process.argv.slice(2);
+    if (argv[0] === "merge") {
+      const result = await mergeGateEvidenceArtifacts(parseMergeArguments(argv.slice(1)));
+      console.log(JSON.stringify({
         artifactDigest: result.artifactDigest,
         evidenceCount: result.artifact.evidence.length,
-        passed: result.passed,
-      }),
-    );
-    process.exitCode = result.passed ? 0 : 1;
+        merged: true,
+      }));
+    } else {
+      const result = await produceGateEvidence(parseArguments(argv));
+      console.log(
+        JSON.stringify({
+          artifactDigest: result.artifactDigest,
+          evidenceCount: result.artifact.evidence.length,
+          passed: result.passed,
+        }),
+      );
+      process.exitCode = result.passed ? 0 : 1;
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : "GateHarness 发生未知错误。");
     process.exitCode = 1;

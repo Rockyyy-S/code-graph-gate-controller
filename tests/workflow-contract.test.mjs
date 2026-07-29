@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { GATE_HARNESS_ARGUMENT_NAMES_V2 } from "../bin/produce-gate-evidence.mjs";
+import {
+  GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3,
+  GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3,
+} from "../bin/produce-gate-evidence.mjs";
 import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "5fe566b89322257076fe9cf5a9f181aa8e7d8fe7";
+const trustedHarnessSha = "e28f0573407912657db2a16ad1a8b8e8a9479ab0";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
+const pnpmWin32ArchiveSha256 =
+  "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";
 const betterSqliteIntegrity =
   "sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==";
 
@@ -33,13 +38,24 @@ test("reusable producer 固定检出已批准的不可变 GateHarness", async ()
 
 test("候选执行 job 不持有 OIDC/attestation 权限，签名在干净 runner 完成", async () => {
   const workflow = await readFile(workflowPath, "utf8");
-  const executionJob = /gate-execution:\s*[\s\S]*?(?=\n  gate-evidence:)/u.exec(workflow)?.[0];
+  const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
+  const win32Job = /\n  gate-execution-win32:\s*[\s\S]*?(?=\n  gate-evidence:)/u.exec(workflow)?.[0];
   const attestationJob = /\n  gate-evidence:\s*[\s\S]*$/u.exec(workflow)?.[0];
+  const elevatedPermissionPattern = new RegExp(
+    ["id-token", "attestations"].map((name) => `${name}:\\s*write`).join("|"),
+    "u",
+  );
 
-  assert.equal(typeof executionJob, "string");
+  assert.equal(typeof portableJob, "string");
+  assert.equal(typeof win32Job, "string");
   assert.equal(typeof attestationJob, "string");
-  assert.doesNotMatch(executionJob, /id-token:\s*write|attestations:\s*write/u);
-  assert.match(attestationJob, /needs:\s*gate-execution/u);
+  assert.doesNotMatch(portableJob, elevatedPermissionPattern);
+  assert.doesNotMatch(win32Job, elevatedPermissionPattern);
+  assert.match(
+    attestationJob,
+    /needs:\s*\n\s+- gate-execution\s*\n\s+- gate-execution-win32/u,
+  );
+  assert.doesNotMatch(attestationJob, /if:\s*\$\{\{\s*always\(\)/u);
   assert.match(attestationJob, /id-token:\s*write/u);
   assert.match(attestationJob, /attestations:\s*write/u);
   assert.match(attestationJob, /actions\/download-artifact@[0-9a-f]{40}/u);
@@ -131,11 +147,58 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
     /git -c safe\.directory="\$candidate_root" -C "\$candidate_root" diff --quiet --no-ext-diff HEAD --/u,
   );
   assert.match(workflow, /--candidate-root \/tmp\/gatecandidate-root\/worktree/u);
+  assert.match(workflow, /--execution-partition portable/u);
   assert.match(workflow, /sudo rm -rf -- \/tmp\/gatecandidate-root/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);
   assert.match(workflow, /--gate-uid 20001/u);
   assert.match(workflow, /--gate-gid 20001/u);
   assert.match(workflow, /env -i HOME=/u);
+});
+
+test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 job 合并", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
+  const win32Job = /\n  gate-execution-win32:\s*[\s\S]*?(?=\n  gate-evidence:)/u.exec(workflow)?.[0];
+  const attestationJob = /\n  gate-evidence:\s*[\s\S]*$/u.exec(workflow)?.[0];
+
+  assert.equal(typeof portableJob, "string");
+  assert.equal(typeof win32Job, "string");
+  assert.equal(typeof attestationJob, "string");
+  assert.match(portableJob, /runs-on:\s*ubuntu-latest/u);
+  assert.match(portableJob, /--execution-partition portable/u);
+  assert.doesNotMatch(portableJob, /--execution-partition win32/u);
+  assert.match(win32Job, /runs-on:\s*windows-latest/u);
+  assert.match(win32Job, /shell:\s*pwsh/u);
+  assert.ok(
+    win32Job.indexOf("Enforce byte-exact LF checkout") <
+      win32Job.indexOf("Checkout immutable GateHarness"),
+  );
+  assert.match(win32Job, /git config --global core\.autocrlf false/u);
+  assert.match(win32Job, /git config --global core\.eol lf/u);
+  assert.match(win32Job, /--execution-partition', 'win32'/u);
+  assert.doesNotMatch(win32Job, /--gate-(?:uid|gid)/u);
+  assert.match(win32Job, /pnpm-win32-x64\.zip/u);
+  assert.match(win32Job, new RegExp(`PNPM_ARCHIVE_SHA256: ${pnpmWin32ArchiveSha256}`, "u"));
+  assert.match(win32Job, /Get-FileHash -Algorithm SHA256/u);
+  assert.match(win32Job, /Expand-Archive -LiteralPath \$archive/u);
+  assert.match(
+    win32Job,
+    /install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
+  );
+  assert.match(win32Job, /Win32 host identity blocking gate 失败/u);
+  assert.match(win32Job, /gate-evidence-win32-raw-/u);
+  assert.doesNotMatch(workflow, /continue-on-error:\s*true/u);
+
+  assert.match(attestationJob, /Checkout immutable GateHarness for clean merge/u);
+  assert.match(attestationJob, new RegExp(`ref: ${trustedHarnessSha}`, "u"));
+  assert.match(attestationJob, /gate-evidence-portable-raw-/u);
+  assert.match(attestationJob, /gate-evidence-win32-raw-/u);
+  assert.match(attestationJob, /produce-gate-evidence\.mjs merge/u);
+  assert.match(attestationJob, /--input-artifacts-json/u);
+  assert.ok(
+    attestationJob.indexOf("produce-gate-evidence.mjs merge") <
+      attestationJob.indexOf("Attest exact evidence artifact"),
+  );
 });
 
 test("Controller attestation policy 与已提升可信根 producer SHA 保持一致", async () => {
@@ -225,28 +288,35 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
   assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:\s*\n\s+inputs:/u);
 });
 
-test("阶段 B producer 固定 Harness V2 并传入 proposal/PR 参数", async () => {
+test("阶段 B producer 固定 Harness V3 平台分区并传入 proposal/PR 参数", async () => {
   const workflow = await readFile(workflowPath, "utf8");
 
-  assert.equal(GATE_HARNESS_CONTRACT_VERSION, 2);
-  assert.deepEqual(GATE_HARNESS_ARGUMENT_NAMES_V2, [
+  assert.equal(GATE_HARNESS_CONTRACT_VERSION, 3);
+  assert.deepEqual(GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3, [
     "--artifact-directory",
     "--base-oid",
     "--candidate-root",
     "--controller-repository",
+    "--execution-partition",
     "--gate-gid",
     "--gate-home",
     "--gate-temp-directory",
     "--gate-uid",
     "--head-oid",
     "--object-format",
-    "--provider-repository-id",
     "--proposed-record-directory",
+    "--provider-repository-id",
     "--pull-number",
     "--trusted-record",
     "--workflow-file",
     "--workflow-sha",
   ]);
+  assert.deepEqual(
+    GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3,
+    GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3.filter(
+      (name) => name !== "--gate-gid" && name !== "--gate-uid",
+    ),
+  );
   assert.match(workflow, /--pull-number "\$PULL_NUMBER"/u);
   assert.match(
     workflow,

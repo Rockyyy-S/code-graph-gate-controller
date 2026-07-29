@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   gate-execution:
-    name: gate-execution
+    name: gate-execution-portable
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 5fe566b89322257076fe9cf5a9f181aa8e7d8fe7
+          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -282,6 +282,7 @@ jobs:
             --base-oid "$BASE_OID" \
             --candidate-root /tmp/gatecandidate-root/worktree \
             --controller-repository Rockyyy-S/code-graph-gate-controller \
+            --execution-partition portable \
             --gate-gid 20001 \
             --gate-home /tmp/gatecandidate-home \
             --gate-temp-directory /g \
@@ -300,7 +301,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # 固定 v4 提交
         with:
           if-no-files-found: error
-          name: gate-evidence-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          name: gate-evidence-portable-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
           path: artifacts/
           retention-days: 1
 
@@ -315,10 +316,194 @@ jobs:
           sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home \
             /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
 
+  gate-execution-win32:
+    name: gate-execution-win32
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Validate fixed provider inputs
+        env:
+          BASE_OID: ${{ inputs.base_oid }}
+          HEAD_OID: ${{ inputs.head_oid }}
+          OBJECT_FORMAT: ${{ inputs.object_format }}
+          PULL_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
+          PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
+          REPOSITORY: ${{ inputs.repository }}
+        shell: pwsh
+        run: |
+          if ($env:BASE_OID -notmatch '^[a-f0-9]{40}$') { throw 'base_oid 无效。' }
+          if ($env:HEAD_OID -notmatch '^[a-f0-9]{40}$') { throw 'head_oid 无效。' }
+          if ($env:OBJECT_FORMAT -ne 'sha1') { throw 'object_format 无效。' }
+          if ($env:PULL_NUMBER -notmatch '^(0|[1-9][0-9]*)$') { throw 'pull number 无效。' }
+          if ($env:PRODUCER_WORKFLOW_SHA -notmatch '^[a-f0-9]{40}$') { throw 'producer SHA 无效。' }
+          if ($env:PROVIDER_REPOSITORY_ID -ne '1303415307') { throw 'provider repository id 无效。' }
+          if ($env:REPOSITORY -ne 'Rockyyy-S/code-graph') { throw 'provider repository 无效。' }
+
+      - name: Enforce byte-exact LF checkout
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          if ((git config --global --get core.autocrlf) -ne 'false') { throw 'core.autocrlf 未锁定为 false。' }
+          if ((git config --global --get core.eol) -ne 'lf') { throw 'core.eol 未锁定为 lf。' }
+
+      - name: Checkout immutable GateHarness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
+        with:
+          fetch-depth: 1
+          path: trusted-harness
+          persist-credentials: false
+          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
+          repository: Rockyyy-S/code-graph-gate-controller
+
+      - name: Checkout trusted registry state
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
+        with:
+          fetch-depth: 1
+          path: trusted-state
+          persist-credentials: false
+          ref: main
+          repository: Rockyyy-S/code-graph-gate-controller
+
+      - name: Checkout exact candidate OID
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
+        with:
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+          ref: ${{ inputs.head_oid }}
+          repository: ${{ inputs.repository }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 固定 v4 提交
+        with:
+          node-version: 24.18.0
+
+      - name: Install checksum-pinned pnpm Win32 release
+        env:
+          PNPM_ARCHIVE_SHA256: 7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b # pnpm v11.12.0 官方 Win32 x64 release asset 摘要
+          PNPM_ARCHIVE_URL: https://github.com/pnpm/pnpm/releases/download/v11.12.0/pnpm-win32-x64.zip
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'pnpm-win32-x64-11.12.0.zip'
+          $staging = Join-Path $env:RUNNER_TEMP ("pnpm-11.12.0-{0}" -f ([guid]::NewGuid().ToString('N')))
+          $trustedRoot = Join-Path $env:RUNNER_TEMP 'trusted-pnpm'
+          try {
+            curl.exe --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --retry 3 --show-error --silent --output $archive $env:PNPM_ARCHIVE_URL
+            if ($LASTEXITCODE -ne 0) { throw 'pnpm Win32 release 下载失败。' }
+            $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+            if ($actualArchiveSha -ne $env:PNPM_ARCHIVE_SHA256) { throw 'pnpm Win32 release 摘要不匹配。' }
+
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
+            try {
+              $files = @($zip.Entries | Where-Object { $_.Name.Length -gt 0 })
+              if ($files.Count -ne 1 -or $files[0].FullName -ne 'pnpm.exe') {
+                throw 'pnpm Win32 release 必须只包含根目录 pnpm.exe。'
+              }
+            } finally {
+              $zip.Dispose()
+            }
+
+            New-Item -ItemType Directory -Path $staging | Out-Null
+            Expand-Archive -LiteralPath $archive -DestinationPath $staging
+            $sourcePnpm = Join-Path $staging 'pnpm.exe'
+            $sourceItem = Get-Item -LiteralPath $sourcePnpm
+            if (-not $sourceItem.Exists -or $sourceItem.Length -le 0 -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'pnpm.exe 不是有效的普通文件。'
+            }
+            New-Item -ItemType Directory -Path $trustedRoot | Out-Null
+            $trustedPnpm = Join-Path $trustedRoot 'pnpm.exe'
+            Copy-Item -LiteralPath $sourcePnpm -Destination $trustedPnpm
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePnpm).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $trustedPnpm).Hash) {
+              throw 'pnpm.exe 复制后摘要漂移。'
+            }
+            "TRUSTED_PNPM_BIN=$trustedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            $trustedRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } finally {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $staging -Force -Recurse -ErrorAction SilentlyContinue
+          }
+
+      - name: Install frozen dependencies without candidate lifecycle
+        shell: pwsh
+        run: |
+          $trustedPnpm = Join-Path $env:TRUSTED_PNPM_BIN 'pnpm.exe'
+          $pnpmVersion = & $trustedPnpm --version
+          if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm 版本无效。' }
+          $candidateRoot = (Resolve-Path -LiteralPath 'candidate').Path
+          $candidateHead = (& git -C $candidateRoot rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $candidateHead -ne '${{ inputs.head_oid }}') { throw '候选 checkout 未绑定 head_oid。' }
+          & $trustedPnpm --dir $candidateRoot install --frozen-lockfile --ignore-pnpmfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw '候选依赖安装失败。' }
+          & git -C $candidateRoot diff --quiet --no-ext-diff HEAD --
+          if ($LASTEXITCODE -ne 0) { throw '候选 tracked 文件在安装期间发生漂移。' }
+
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts-win32'
+          $gateHome = Join-Path $env:RUNNER_TEMP 'gatecandidate-home'
+          $gateTemp = Join-Path $env:RUNNER_TEMP 'gatecandidate-temp'
+          $harnessHome = Join-Path $env:RUNNER_TEMP 'trusted-harness-home'
+          New-Item -ItemType Directory -Force -Path $artifactDirectory, $gateHome, $gateTemp, $harnessHome | Out-Null
+          "ARTIFACT_DIRECTORY=$artifactDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CANDIDATE_ROOT=$candidateRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GATE_HOME=$gateHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GATE_TEMP=$gateTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HARNESS_HOME=$harnessHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Produce Win32 host identity evidence
+        env:
+          BASE_OID: ${{ inputs.base_oid }}
+          HEAD_OID: ${{ inputs.head_oid }}
+          OBJECT_FORMAT: ${{ inputs.object_format }}
+          PULL_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
+          PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
+        shell: pwsh
+        run: |
+          $arguments = @(
+            'trusted-harness/bin/produce-gate-evidence.mjs',
+            '--artifact-directory', $env:ARTIFACT_DIRECTORY,
+            '--base-oid', $env:BASE_OID,
+            '--candidate-root', $env:CANDIDATE_ROOT,
+            '--controller-repository', 'Rockyyy-S/code-graph-gate-controller',
+            '--execution-partition', 'win32',
+            '--gate-home', $env:GATE_HOME,
+            '--gate-temp-directory', $env:GATE_TEMP,
+            '--head-oid', $env:HEAD_OID,
+            '--object-format', $env:OBJECT_FORMAT,
+            '--provider-repository-id', $env:PROVIDER_REPOSITORY_ID,
+            '--proposed-record-directory', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/proposed'),
+            '--pull-number', $env:PULL_NUMBER,
+            '--trusted-record', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/registry.json'),
+            '--workflow-file', 'produce-gate-evidence.yml',
+            '--workflow-sha', $env:PRODUCER_WORKFLOW_SHA
+          )
+          $previousHome = $env:HOME
+          try {
+            $env:HOME = $env:HARNESS_HOME
+            & node @arguments
+            if ($LASTEXITCODE -ne 0) { throw 'Win32 host identity blocking gate 失败。' }
+          } finally {
+            $env:HOME = $previousHome
+          }
+
+      - name: Upload unsigned Win32 evidence
+        if: ${{ always() && hashFiles('artifacts-win32/**') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # 固定 v4 提交
+        with:
+          if-no-files-found: error
+          name: gate-evidence-win32-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          path: artifacts-win32/
+          retention-days: 1
+
   gate-evidence:
     name: gate-evidence
-    needs: gate-execution
-    if: ${{ always() }}
+    needs:
+      - gate-execution
+      - gate-execution-win32
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -327,11 +512,39 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Download unsigned evidence into a clean runner
+      - name: Checkout immutable GateHarness for clean merge
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 固定 v4 提交
+        with:
+          fetch-depth: 1
+          path: trusted-harness
+          persist-credentials: false
+          ref: e28f0573407912657db2a16ad1a8b8e8a9479ab0
+          repository: Rockyyy-S/code-graph-gate-controller
+
+      - name: Download portable unsigned evidence into a clean runner
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 固定 v4 提交
         with:
-          name: gate-evidence-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
-          path: artifacts
+          name: gate-evidence-portable-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          path: partial/portable
+
+      - name: Download Win32 unsigned evidence into a clean runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 固定 v4 提交
+        with:
+          name: gate-evidence-win32-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.head_oid }}
+          path: partial/win32
+
+      - name: Merge platform evidence with immutable GateHarness
+        shell: bash
+        run: |
+          install -d -m 0700 artifacts trusted-harness-home
+          portable_artifact="$PWD/partial/portable/gate-evidence.json"
+          win32_artifact="$PWD/partial/win32/gate-evidence.json"
+          [[ -f "$portable_artifact" && -f "$win32_artifact" ]]
+          input_artifacts_json="$(node --input-type=module --eval 'console.log(JSON.stringify(process.argv.slice(1)))' "$portable_artifact" "$win32_artifact")"
+          env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$PATH" node trusted-harness/bin/produce-gate-evidence.mjs merge \
+            --artifact-directory "$PWD/artifacts" \
+            --input-artifacts-json "$input_artifacts_json"
+          find partial/portable partial/win32 -maxdepth 1 -type f ! -name gate-evidence.json -exec cp -- {} artifacts/ \;
 
       - name: Attest exact evidence artifact
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # 固定 v4 提交

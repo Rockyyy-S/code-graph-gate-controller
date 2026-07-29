@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
   createGateEnvironment,
   createGateRuntimePaths,
   createTrustedGateArguments,
   didRequiredBlockingGatesPass,
   evaluateApplicability,
+  mergeGateEvidenceArtifacts,
   runIdentityProcessTool,
+  selectGateEntriesForPartition,
+  WIN32_HOST_IDENTITY_GATE_ID,
 } from "../lib/harness.mjs";
 import {
   createTrustedGitArguments,
@@ -54,6 +60,112 @@ test("non-blocking gate 失败不改变 required blocking 结论", () => {
   assert.equal(
     didRequiredBlockingGatesPass(evidence, new Set(["required", "advisory"])),
     false,
+  );
+});
+
+test("portable 与 Win32 分区互斥且 Win32 gate 必须保持 blocking", () => {
+  const registry = {
+    gates: [
+      { gateDefinition: { blocking: true, gateId: "type" } },
+      {
+        gateDefinition: {
+          blocking: true,
+          gateId: WIN32_HOST_IDENTITY_GATE_ID,
+        },
+      },
+    ],
+  };
+  assert.deepEqual(
+    selectGateEntriesForPartition(registry, "portable", "linux")
+      .map(([, entry]) => entry.gateDefinition.gateId),
+    ["type"],
+  );
+  assert.deepEqual(
+    selectGateEntriesForPartition(registry, "win32", "win32")
+      .map(([, entry]) => entry.gateDefinition.gateId),
+    [WIN32_HOST_IDENTITY_GATE_ID],
+  );
+  assert.throws(
+    () => selectGateEntriesForPartition(registry, "win32", "linux"),
+    /真实 runner 平台/u,
+  );
+  registry.gates[1].gateDefinition.blocking = false;
+  assert.throws(
+    () => selectGateEntriesForPartition(registry, "win32", "win32"),
+    /缺失|降级/u,
+  );
+});
+
+test("分区 artifact 只在绑定一致且 gate 不重复时合并", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "gate-evidence-merge-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const shared = {
+    affectedPaths: ["apps/graph-service/src/host-path-identity.ts"],
+    evaluationContext: {
+      baseOid: "a".repeat(40),
+      comparisonBaseOid: "a".repeat(40),
+      evaluationContextDigest: "b".repeat(64),
+      gateRegistryDigest: "c".repeat(64),
+      headOid: "d".repeat(40),
+      objectFormat: "sha1",
+      providerRepositoryId: "1303415307",
+      schemaVersion: 1,
+    },
+    gateImplementationDigest: "e".repeat(64),
+    gateRegistryDigest: "c".repeat(64),
+    schemaVersion: 1,
+  };
+  const createEvidence = (gateId) => {
+    const evidence = {
+      evaluationContextDigest: "b".repeat(64),
+      evidenceProducerId:
+        `gha-oidc://1303415307/Rockyyy-S/code-graph-gate-controller/.github/workflows/produce-gate-evidence.yml@${"f".repeat(40)}#${gateId}`,
+      gateDefinitionDigest: "1".repeat(64),
+      gateId,
+      headOid: "d".repeat(40),
+      outputDigest: "2".repeat(64),
+      schemaVersion: 1,
+      status: "pass",
+    };
+    return { ...evidence, gateEvidenceDigest: sha256CanonicalJson(evidence) };
+  };
+  const portablePath = path.join(root, "portable.json");
+  const win32Path = path.join(root, "win32.json");
+  await Promise.all([
+    writeFile(portablePath, JSON.stringify({
+      ...shared,
+      evidence: [createEvidence("type")],
+    })),
+    writeFile(win32Path, JSON.stringify({
+      ...shared,
+      evidence: [createEvidence(WIN32_HOST_IDENTITY_GATE_ID)],
+    })),
+  ]);
+
+  const outputRoot = path.join(root, "merged");
+  const result = await mergeGateEvidenceArtifacts({
+    artifactDirectory: outputRoot,
+    artifactPaths: [portablePath, win32Path],
+  });
+  assert.deepEqual(
+    result.artifact.evidence.map(({ gateId }) => gateId),
+    [WIN32_HOST_IDENTITY_GATE_ID, "type"],
+  );
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(outputRoot, "gate-evidence.json"), "utf8")),
+    result.artifact,
+  );
+
+  await writeFile(win32Path, JSON.stringify({
+    ...shared,
+    evidence: [createEvidence("type")],
+  }));
+  await assert.rejects(
+    mergeGateEvidenceArtifacts({
+      artifactDirectory: outputRoot,
+      artifactPaths: [portablePath, win32Path],
+    }),
+    /重复生成/u,
   );
 });
 
