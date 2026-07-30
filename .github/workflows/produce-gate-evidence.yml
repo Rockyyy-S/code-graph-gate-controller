@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
+          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -357,7 +357,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
+          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -383,6 +383,108 @@ jobs:
         with:
           node-version: 24.18.0
 
+      - name: Select dedicated fixed NTFS root with bounded preflight
+        shell: pwsh
+        run: |
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts-win32'
+          New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
+          $artifactPath = Join-Path $artifactDirectory 'win32-preflight.json'
+          $startedAt = Get-Date
+          $report = [ordered]@{
+            schemaVersion = 1
+            processPlatform = if ($IsWindows) { 'win32' } else { [Environment]::OSVersion.Platform.ToString() }
+            candidateRoot = (Resolve-Path -LiteralPath 'candidate').Path
+            runnerTemp = $env:RUNNER_TEMP
+            selectedRoot = $null
+            drive = $null
+            fileSystem = $null
+            driveType = $null
+            getVolume = [ordered]@{ status = $null; stdout = ''; stderr = ''; timeout = $false }
+            root = [ordered]@{ ordinary = $false; reparse = $null }
+            probeStartedAt = $startedAt.ToUniversalTime().ToString('o')
+            probeDurationMs = 0
+          }
+          $failure = $null
+          $job = $null
+          try {
+            if (-not $IsWindows) { throw 'NON_WIN32: hosted preflight 必须运行在 Windows。' }
+            $job = Start-Job -ScriptBlock {
+              $ErrorActionPreference = 'Stop'
+              @(Get-Volume -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                  DriveLetter = [string]$_.DriveLetter
+                  FileSystem = [string]$_.FileSystem
+                  DriveType = [string]$_.DriveType
+                }
+              }) | ConvertTo-Json -Compress
+            }
+            $completed = Wait-Job -Job $job -Timeout 10
+            if ($null -eq $completed) {
+              $report.getVolume.timeout = $true
+              $report.getVolume.stderr = 'Get-Volume exceeded 10 second deadline.'
+              throw 'GET_VOLUME_TIMEOUT: Get-Volume 超过固定 deadline。'
+            }
+            $probeErrors = @()
+            $probeOutput = Receive-Job -Job $job -ErrorAction SilentlyContinue -ErrorVariable +probeErrors | Out-String
+            $probeErrorText = $probeErrors | Out-String
+            $report.getVolume.status = if ($job.State -eq 'Completed') { 0 } else { 1 }
+            $report.getVolume.stdout = $probeOutput.Substring(0, [Math]::Min($probeOutput.Length, 16384))
+            $report.getVolume.stderr = $probeErrorText.Substring(0, [Math]::Min($probeErrorText.Length, 16384))
+            if ($report.getVolume.status -ne 0) {
+              throw "GET_VOLUME_ERROR: status=$($report.getVolume.status) stderr=$($report.getVolume.stderr)"
+            }
+            $volumes = @($probeOutput | ConvertFrom-Json)
+            if ($volumes.Count -gt 0) {
+              $report.drive = [string]$volumes[0].DriveLetter
+              $report.fileSystem = [string]$volumes[0].FileSystem
+              $report.driveType = [string]$volumes[0].DriveType
+            }
+            foreach ($volume in @($volumes | Sort-Object DriveLetter)) {
+              if (
+                [string]$volume.FileSystem -ne 'NTFS' -or
+                [string]$volume.DriveType -ne 'Fixed' -or
+                [string]::IsNullOrWhiteSpace([string]$volume.DriveLetter)
+              ) { continue }
+              $candidate = "{0}:\codegraph-gate-{1}-{2}" -f $volume.DriveLetter, $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+              try {
+                New-Item -ItemType Directory -Force -Path $candidate | Out-Null
+                $item = Get-Item -LiteralPath $candidate -Force
+                $ordinary = [bool]$item.PSIsContainer
+                $reparse = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+                $report.root.ordinary = $ordinary
+                $report.root.reparse = $reparse
+                if (-not $ordinary -or $reparse) { continue }
+                $report.selectedRoot = [IO.Path]::GetFullPath($item.FullName)
+                $report.drive = [string]$volume.DriveLetter
+                $report.fileSystem = [string]$volume.FileSystem
+                $report.driveType = [string]$volume.DriveType
+                break
+              } catch {
+                $report.getVolume.stderr = ($report.getVolume.stderr + " root-probe=" + $_.Exception.Message).Substring(0, [Math]::Min(($report.getVolume.stderr + " root-probe=" + $_.Exception.Message).Length, 16384))
+              }
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$report.selectedRoot)) {
+              throw "NO_SAFE_NTFS_VOLUME: FileSystem=$($report.fileSystem) DriveType=$($report.driveType)"
+            }
+          } catch {
+            $failure = $_.Exception.Message
+          } finally {
+            if ($null -ne $job) {
+              Stop-Job -Job $job -ErrorAction SilentlyContinue
+              Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            }
+            $report.probeDurationMs = [Math]::Max(0, [int]((Get-Date) - $startedAt).TotalMilliseconds)
+            $report | ConvertTo-Json -Depth 6 -Compress | Out-File -LiteralPath $artifactPath -Encoding utf8
+          }
+          if ($null -ne $failure) { throw $failure }
+          "ARTIFACT_DIRECTORY=$artifactDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GATE_TEMP=$($report.selectedRoot)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$($report.selectedRoot)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$($report.selectedRoot)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMPDIR=$($report.selectedRoot)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WIN32_PREFLIGHT_ARTIFACT=$artifactPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+
       - name: Install checksum-pinned pnpm Win32 release
         env:
           PNPM_ARCHIVE_SHA256: 7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b # pnpm v11.12.0 官方 Win32 x64 release asset 摘要
@@ -391,8 +493,8 @@ jobs:
           PNPM_ENTRY_SIZE: '98099528'
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'pnpm-win32-x64-11.12.0.zip'
-          $trustedRoot = Join-Path $env:RUNNER_TEMP 'trusted-pnpm'
+          $archive = Join-Path $env:GATE_TEMP 'pnpm-win32-x64-11.12.0.zip'
+          $trustedRoot = Join-Path $env:GATE_TEMP 'trusted-pnpm'
           try {
             curl.exe --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --retry 3 --show-error --silent --output $archive $env:PNPM_ARCHIVE_URL
             if ($LASTEXITCODE -ne 0) { throw 'pnpm Win32 release 下载失败。' }
@@ -415,6 +517,14 @@ jobs:
             $pnpmVersion = & $trustedPnpm --version
             if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm 版本无效。' }
             "TRUSTED_PNPM_EXE=$trustedPnpm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            $sentinelRoot = Join-Path $env:GATE_TEMP 'path-sentinel'
+            $sentinelMarker = Join-Path $sentinelRoot 'invoked.marker'
+            New-Item -ItemType Directory -Force -Path $sentinelRoot | Out-Null
+            "@echo off`r`necho invoked>`"$sentinelMarker`"`r`nexit /b 97`r`n" | Out-File -LiteralPath (Join-Path $sentinelRoot 'pnpm.cmd') -Encoding ascii
+            "Set-Content -LiteralPath '$($sentinelMarker.Replace("'", "''"))' -Value invoked; exit 97" | Out-File -LiteralPath (Join-Path $sentinelRoot 'pnpm.ps1') -Encoding utf8
+            "PATH_SENTINEL_MARKER=$sentinelMarker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "PATH_SENTINEL_ROOT=$sentinelRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "PATH=$sentinelRoot;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           } finally {
             Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
           }
@@ -434,16 +544,17 @@ jobs:
           & git -C $candidateRoot diff --quiet --no-ext-diff HEAD --
           if ($LASTEXITCODE -ne 0) { throw '候选 tracked 文件在安装期间发生漂移。' }
 
-          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts-win32'
-          $gateHome = Join-Path $env:RUNNER_TEMP 'gatecandidate-home'
-          $gateTemp = Join-Path $env:RUNNER_TEMP 'gatecandidate-temp'
-          $harnessHome = Join-Path $env:RUNNER_TEMP 'trusted-harness-home'
+          $artifactDirectory = $env:ARTIFACT_DIRECTORY
+          $gateHome = Join-Path $env:GATE_TEMP 'gatecandidate-home'
+          $gateTemp = $env:GATE_TEMP
+          $harnessHome = Join-Path $env:GATE_TEMP 'trusted-harness-home'
           New-Item -ItemType Directory -Force -Path $artifactDirectory, $gateHome, $gateTemp, $harnessHome | Out-Null
-          "ARTIFACT_DIRECTORY=$artifactDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CANDIDATE_ROOT=$candidateRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "GATE_HOME=$gateHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "GATE_TEMP=$gateTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "HARNESS_HOME=$harnessHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HOST_PATH_INVOCATION_ATTESTATION=$(Join-Path $artifactDirectory 'host-path-invocation.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PATH_RUNTIME_ATTESTATION=$(Join-Path $artifactDirectory 'win32-path-runtime.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Revalidate trusted pnpm launcher for evidence
         env:
@@ -478,6 +589,25 @@ jobs:
           if ($actualEntrySha -ne $env:PNPM_ENTRY_SHA256) { throw '可信 pnpm launcher SHA-256 漂移。' }
           $pnpmVersion = & $trustedPnpm --version
           if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm launcher 版本漂移。' }
+          Remove-Item Env:npm_execpath -ErrorAction SilentlyContinue
+          $commands = @(Get-Command pnpm -All -ErrorAction SilentlyContinue | Select-Object -First 8 | ForEach-Object {
+            $commandPath = if ([string]::IsNullOrWhiteSpace([string]$_.Path)) { [string]$_.Source } else { [string]$_.Path }
+            [ordered]@{
+              commandType = [string]$_.CommandType
+              path = if ([string]::IsNullOrWhiteSpace($commandPath)) { '' } else { [IO.Path]::GetFullPath($commandPath) }
+            }
+          })
+          [ordered]@{
+            schemaVersion = 1
+            processPlatform = 'win32'
+            npmExecPathAbsent = -not (Test-Path Env:npm_execpath)
+            trustedExecutable = [IO.Path]::GetFullPath($trustedPnpm)
+            trustedExecutableSha256 = $actualEntrySha
+            trustedExecutableSize = [int64]$trustedItem.Length
+            trustedExecutableVersion = $pnpmVersion.Trim()
+            getCommandPnpmAll = $commands
+            sentinelMarker = $env:PATH_SENTINEL_MARKER
+          } | ConvertTo-Json -Depth 5 -Compress | Out-File -LiteralPath $env:PATH_RUNTIME_ATTESTATION -Encoding utf8
 
       - name: Produce Win32 host identity evidence
         env:
@@ -500,12 +630,15 @@ jobs:
             '--gate-temp-directory', $env:GATE_TEMP,
             '--harness-contract-version', '4',
             '--head-oid', $env:HEAD_OID,
+            '--host-path-invocation-attestation', $env:HOST_PATH_INVOCATION_ATTESTATION,
             '--object-format', $env:OBJECT_FORMAT,
+            '--path-sentinel-marker', $env:PATH_SENTINEL_MARKER,
             '--provider-repository-id', $env:PROVIDER_REPOSITORY_ID,
             '--proposed-record-directory', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/proposed'),
             '--pull-number', $env:PULL_NUMBER,
             '--trusted-record', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/registry.json'),
             '--trusted-pnpm-executable', $env:TRUSTED_PNPM_EXE,
+            '--win32-preflight-artifact', $env:WIN32_PREFLIGHT_ARTIFACT,
             '--workflow-file', 'produce-gate-evidence.yml',
             '--workflow-sha', $env:PRODUCER_WORKFLOW_SHA
           )
@@ -514,6 +647,7 @@ jobs:
             $env:HOME = $env:HARNESS_HOME
             & node @arguments
             if ($LASTEXITCODE -ne 0) { throw 'Win32 host identity blocking gate 失败。' }
+            if (Test-Path -LiteralPath $env:PATH_SENTINEL_MARKER) { throw '恶意 PATH pnpm sentinel 被调用。' }
           } finally {
             $env:HOME = $previousHome
           }
@@ -546,7 +680,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
+          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Download portable unsigned evidence into a clean runner

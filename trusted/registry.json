@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "providerRepositoryId": "1303415307",
-  "sequence": 21,
-  "gateImplementationDigest": "73baab9447b3ca99417e9a89b94af028274d3f89f484163a2655f78c280578be",
-  "gateRegistryDigest": "9453578e7a3edb032fdb8aedefa0d649e63c056b5348b58fa78673ddc8de9807",
-  "sourceCommit": "4d200d1dae056cbfe36ac1fcd5e07fc0d9e926db",
-  "approvalEvidenceDigest": "5fdb5460e29f1286ff3c9c9040a7a1d7e5ab9fe23c95d51b74edb4e2ad390f32",
-  "effectiveAt": "2026-07-30T08:48:00+08:00"
+  "sequence": 22,
+  "gateImplementationDigest": "8c422dd3653720ef0e726f774ea8ae41ffe8464c4e4cf034c138dc9e3eda5249",
+  "gateRegistryDigest": "16f0ad98a2ab0252c980b39896745e59cf49c6161f21399a2f55a5788f5ffb4c",
+  "sourceCommit": "3a99068bcbd3b1313d7ca4e5478ac194a93010c0",
+  "approvalEvidenceDigest": "607dcc8fce73ddf247df32f71cf04f1630f8817a5a818d1799d074243d6a68d9",
+  "effectiveAt": "2026-07-30T13:23:00+08:00"
 }

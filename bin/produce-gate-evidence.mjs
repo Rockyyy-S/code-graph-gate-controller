@@ -46,7 +46,10 @@ export const GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4 = Object.freeze([
 ].sort());
 export const GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4 = Object.freeze([
   ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V4,
+  "--host-path-invocation-attestation",
+  "--path-sentinel-marker",
   "--trusted-pnpm-executable",
+  "--win32-preflight-artifact",
 ].sort());
 
 /** 合并命令只接受绝对输出目录与 JSON 编码的绝对输入路径数组。 */
@@ -103,6 +106,12 @@ function parseArgumentsForContract(argv, contractVersion) {
       ? parsePositiveInteger(values.get("--gate-uid"), "--gate-uid")
       : undefined,
     headOid: values.get("--head-oid"),
+    hostPathInvocationAttestationPath: executionPartition === "win32" && contractVersion === 4
+      ? parseAbsolutePath(
+          values.get("--host-path-invocation-attestation"),
+          "--host-path-invocation-attestation",
+        )
+      : undefined,
     objectFormat: values.get("--object-format"),
     providerRepositoryId: values.get("--provider-repository-id"),
     proposedRecordDirectory: parseAbsolutePath(
@@ -110,11 +119,20 @@ function parseArgumentsForContract(argv, contractVersion) {
       "--proposed-record-directory",
     ),
     pullNumber: parseNonNegativeInteger(values.get("--pull-number"), "--pull-number"),
+    pathSentinelMarkerPath: executionPartition === "win32" && contractVersion === 4
+      ? parseAbsolutePath(values.get("--path-sentinel-marker"), "--path-sentinel-marker")
+      : undefined,
     trustedRecordPath: path.resolve(values.get("--trusted-record")),
     trustedPnpmExecutable: executionPartition === "win32" && contractVersion === 4
       ? parseAbsolutePath(
           values.get("--trusted-pnpm-executable"),
           "--trusted-pnpm-executable",
+        )
+      : undefined,
+    win32PreflightArtifactPath: executionPartition === "win32" && contractVersion === 4
+      ? parseAbsolutePath(
+          values.get("--win32-preflight-artifact"),
+          "--win32-preflight-artifact",
         )
       : undefined,
     workflowFile: values.get("--workflow-file"),
