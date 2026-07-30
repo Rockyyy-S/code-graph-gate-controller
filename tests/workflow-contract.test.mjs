@@ -10,6 +10,7 @@ import {
 import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
+const harnessPath = new URL("../lib/harness.mjs", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
 const trustedHarnessSha = "368328f272125c62922d0b642d95efe31a6ae9a9";
@@ -29,6 +30,33 @@ test("reusable producer 显式接收并绑定外部 workflow commit SHA", async 
   assert.match(workflow, /PRODUCER_WORKFLOW_SHA: \$\{\{ inputs\.producer_workflow_sha \}\}/u);
   assert.match(workflow, /--workflow-sha "\$PRODUCER_WORKFLOW_SHA"/u);
   assert.doesNotMatch(workflow, /github\.workflow_sha/u);
+});
+
+test("Win32 外层固定 deadline preflight 由 Harness 验证后传递给候选", async () => {
+  const [workflow, harness] = await Promise.all([
+    readFile(workflowPath, "utf8"),
+    readFile(harnessPath, "utf8"),
+  ]);
+  const win32Job = /\n  gate-execution-win32:\s*[\s\S]*?(?=\n  gate-evidence:)/u.exec(workflow)?.[0];
+
+  assert.equal(typeof win32Job, "string");
+  assert.match(win32Job, /Get-Volume -ErrorAction Stop/u);
+  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 10/u);
+  assert.match(win32Job, /--win32-preflight-artifact', \$env:WIN32_PREFLIGHT_ARTIFACT/u);
+  assert.match(harness, /validatedWin32Preflight = validateWin32PreflightArtifact/u);
+  assert.match(harness, /CODEGRAPH_TRUSTED_WIN32_PREFLIGHT_V1/u);
+  assert.match(harness, /JSON\.stringify\(options\.validatedWin32Preflight\)/u);
+});
+
+test("Controller terminal failure 通过 Checks PATCH 原位终结 pending", async () => {
+  const controller = await readFile(
+    new URL("../bin/run-controller.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(controller, /createTerminalFailureCheckRecord/u);
+  assert.match(controller, /check-runs\/\$\{checkId\}/u);
+  assert.match(controller, /method: "PATCH"/u);
 });
 
 test("reusable producer 固定检出已批准的不可变 GateHarness", async () => {

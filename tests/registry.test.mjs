@@ -208,7 +208,7 @@ test("可信 registry sequence=22 正式提升 Win32 Job 终态与 NTFS prefligh
   );
 });
 
-test("sequence 22 当前根只选择精确 attempt 11 sequence 23 proposal", async () => {
+test("sequence 22 当前根只选择精确 attempt 12 sequence 23 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -217,7 +217,7 @@ test("sequence 22 当前根只选择精确 attempt 11 sequence 23 proposal", asy
     {
       currentRecord,
       expectedProducerWorkflowSha: "685e81e36e775fe12399d0d7b7e95fa837323254",
-      now: Date.parse("2026-07-30T18:05:00+08:00"),
+      now: Date.parse("2026-07-30T20:41:00+08:00"),
     },
   );
 
@@ -227,7 +227,7 @@ test("sequence 22 当前根只选择精确 attempt 11 sequence 23 proposal", asy
   assert.equal(proposals[0].record.pullNumber, 9);
   assert.equal(
     proposals[0].record.headOid,
-    "d90cf0be74aaab186f080dec19271d399fca859f",
+    "a8b7e168b2838bca5ca0d586801ebee8f38dee04",
   );
   assert.equal(
     proposals[0].record.baseGateRegistryDigest,
@@ -239,7 +239,7 @@ test("sequence 22 当前根只选择精确 attempt 11 sequence 23 proposal", asy
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
-    "fbdc75d18d730e19b3867611a8e6e28ff59b45ba2e7092d8e252946d7dc80e20",
+    "6a106c1558e6fcd9da1d5c0d90fd12cc99eb59216605dccc19b256bbb787e1a7",
   );
   assert.equal(
     proposals[0].approval.producerWorkflowSha,

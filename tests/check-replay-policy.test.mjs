@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyCheckReplay } from "../lib/check-replay-policy.mjs";
+import {
+  classifyCheckReplay,
+  planCheckReplay,
+} from "../lib/check-replay-policy.mjs";
 
 const casKey = "1303415307:head:context:implementation:3";
 
@@ -130,6 +133,76 @@ test("稳定 pending CAS 与 replay digest 在 guardian 重跑时保持幂等", 
       conclusion: null,
       replayDigest: pendingReplayDigest,
       status: "in_progress",
+    }),
+    "idempotent",
+  );
+});
+
+test("同一 workflow run 的 pending 可以原位转换为稳定 terminal failure", () => {
+  const pendingCasKey = "1303415307:head:pending:5:100:1";
+  const pending = {
+    conclusion: null,
+    id: 8,
+    output: {
+      summary: JSON.stringify({
+        casKey: pendingCasKey,
+        replayDigest: "b".repeat(64),
+        status: "pending",
+      }),
+    },
+    status: "in_progress",
+  };
+  const plan = planCheckReplay({
+    casKey: pendingCasKey,
+    checks: [pending],
+    conclusion: "failure",
+    replayDigest: "c".repeat(64),
+    status: "completed",
+  });
+
+  assert.equal(plan.action, "transition");
+  assert.equal(plan.check, pending);
+  assert.equal(
+    classifyCheckReplay({
+      casKey: pendingCasKey,
+      checks: [pending],
+      conclusion: "failure",
+      replayDigest: "c".repeat(64),
+      status: "completed",
+    }),
+    "transition",
+  );
+});
+
+test("既有 terminal failure 即使后面存在旧 storm 记录也保持幂等", () => {
+  const terminalCasKey = "1303415307:head:pending:5:100:1";
+  const terminalReplayDigest = "c".repeat(64);
+  const terminal = {
+    conclusion: "failure",
+    id: 8,
+    output: {
+      summary: JSON.stringify({
+        casKey: terminalCasKey,
+        replayDigest: terminalReplayDigest,
+        status: "terminal-failure",
+      }),
+    },
+    status: "completed",
+  };
+  const legacyStormFailure = {
+    conclusion: "failure",
+    id: 9,
+    output: { summary: "child evidence workflow failed" },
+    status: "completed",
+  };
+
+  assert.equal(
+    classifyCheckReplay({
+      casKey: terminalCasKey,
+      checks: [terminal, legacyStormFailure],
+      conclusion: "failure",
+      replayDigest: terminalReplayDigest,
+      status: "completed",
     }),
     "idempotent",
   );

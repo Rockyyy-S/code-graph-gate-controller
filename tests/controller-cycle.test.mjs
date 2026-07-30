@@ -7,6 +7,7 @@ import {
   assertUniqueOpenPullHeads,
   closePublishedSuccess,
   createPendingCheckRecord,
+  createTerminalFailureCheckRecord,
   executeControllerCycle,
   revalidatePublishedSuccess,
   sameCurrentPullSnapshot,
@@ -156,6 +157,36 @@ test("同一 PR/head/child run 的 pending check 使用稳定幂等键", () => {
     createPendingCheckRecord({ ...input, run: { ...input.run, id: 101 } }).casKey,
     first.casKey,
   );
+});
+
+test("child run terminal failure 复用 pending CAS 并生成稳定 replay digest", () => {
+  const input = {
+    headOid: "b".repeat(40),
+    pullNumber: 9,
+    repositoryId: "1303415307",
+    run: {
+      conclusion: "failure",
+      id: 30535583048,
+      run_attempt: 1,
+      status: "completed",
+    },
+  };
+  const pending = createPendingCheckRecord(input);
+  const first = createTerminalFailureCheckRecord(input);
+  const second = createTerminalFailureCheckRecord(structuredClone(input));
+
+  assert.deepEqual(second, first);
+  assert.equal(first.casKey, pending.casKey);
+  assert.notEqual(first.replayDigest, pending.replayDigest);
+  assert.deepEqual(JSON.parse(first.summary), {
+    casKey: first.casKey,
+    reason: "child evidence workflow run 30535583048/1 未成功。",
+    replayDigest: first.replayDigest,
+    runAttempt: "1",
+    runConclusion: "failure",
+    runId: "30535583048",
+    status: "terminal-failure",
+  });
 });
 
 test("success 发布后按 run、PR、monitor 顺序再次闭合 provider 状态", async () => {
