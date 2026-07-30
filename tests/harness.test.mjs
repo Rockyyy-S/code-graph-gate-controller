@@ -85,6 +85,12 @@ test("Win32 preflight 区分非 NTFS、查询错误、超时与非 Win32 并保�
       expected: "linux",
       preflight: createWin32Preflight(),
     },
+    {
+      code: "WIN32_PREFLIGHT_DEADLINE_DRIFT",
+      context,
+      expected: "10001",
+      preflight: createWin32Preflight({ probeDurationMs: 10_001 }),
+    },
   ];
   for (const item of cases) {
     assert.throws(
@@ -276,6 +282,38 @@ test("嵌套 pnpm 继承 hooks 与依赖二次安装禁用环境", () => {
   assert.equal(environment.PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS, "false");
   assert.equal(environment.PNPM_CONFIG_IGNORE_PNPMFILE, "true");
   assert.equal(environment.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN, "false");
+  assert.equal(environment.CODEGRAPH_TRUSTED_WIN32_PREFLIGHT_V1, undefined);
+});
+
+test("Win32 Harness 只向候选传递已验证 preflight，portable 分区不暴露", () => {
+  const selectedRoot = path.resolve("win32-preflight-root");
+  const validatedWin32Preflight = validateWin32PreflightArtifact(
+    createWin32Preflight({ selectedRoot }),
+    { gateTempDirectory: selectedRoot, platform: "win32" },
+  );
+  const shared = {
+    baseOid: "a".repeat(40),
+    gateHome: selectedRoot,
+    gateTempDirectory: selectedRoot,
+    headOid: "b".repeat(40),
+    validatedWin32Preflight,
+  };
+  const win32Environment = createGateEnvironment({
+    ...shared,
+    executionPartition: "win32",
+    hostPathInvocationAttestationPath: path.join(selectedRoot, "invocation.json"),
+    trustedPnpmExecutable: path.join(selectedRoot, "pnpm.exe"),
+  });
+  const portableEnvironment = createGateEnvironment({
+    ...shared,
+    executionPartition: "portable",
+  });
+
+  assert.deepEqual(
+    JSON.parse(win32Environment.CODEGRAPH_TRUSTED_WIN32_PREFLIGHT_V1),
+    validatedWin32Preflight,
+  );
+  assert.equal(portableEnvironment.CODEGRAPH_TRUSTED_WIN32_PREFLIGHT_V1, undefined);
 });
 
 test("显式可信 launcher 在无 npm_execpath 且恶意 PATH 存在时仍以绝对路径执行", async (context) => {

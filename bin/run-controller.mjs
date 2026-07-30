@@ -262,12 +262,20 @@ async function processPullRequest(initialPull, trustedRecord) {
         continue;
       }
       if (currentPull !== null) {
+        const terminal = createTerminalFailureCheckRecord({
+          category: "controller-validation-failure",
+          headOid: currentPull.head.sha,
+          pullNumber: currentPull.number,
+          reason: error instanceof Error ? error.message : "Controller 未知验证错误。",
+          run: null,
+        });
         await publishCheckForStablePull(
           currentPull,
           "completed",
           "failure",
-          error instanceof Error ? error.message : "Controller 未知验证错误。",
-          null,
+          terminal.summary,
+          terminal.casKey,
+          terminal.replayDigest,
         );
       }
       return;
@@ -306,12 +314,18 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
     return;
   }
   if (run.conclusion !== "success") {
+    const terminal = createTerminalFailureCheckRecord({
+      headOid,
+      pullNumber: pull.number,
+      run,
+    });
     await publishCheckForStablePull(
       pull,
       "completed",
       "failure",
-      `child evidence workflow run ${run.id}/${run.run_attempt} 未成功。`,
-      null,
+      terminal.summary,
+      terminal.casKey,
+      terminal.replayDigest,
     );
     return;
   }
@@ -338,12 +352,20 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
     (artifact) => artifact.name === expectedPrefix && !artifact.expired,
   );
   if (matching.length !== 1) {
+    const terminal = createTerminalFailureCheckRecord({
+      category: "required-evidence-artifact-invalid",
+      headOid,
+      pullNumber: pull.number,
+      reason: "required evidence artifact 缺失或重复。",
+      run,
+    });
     await publishCheckForStablePull(
       pull,
       "completed",
       "failure",
-      "required evidence artifact 缺失或重复。",
-      null,
+      terminal.summary,
+      terminal.casKey,
+      terminal.replayDigest,
     );
     return;
   }
@@ -511,6 +533,60 @@ export function createPendingCheckRecord({
   };
 }
 
+/**
+ * 为 terminal failure 生成稳定 CAS/replayDigest；存在 child run 时复用原 pending CAS。
+ *
+ * @param {{
+ *   category?: string;
+ *   headOid: string;
+ *   pullNumber: number;
+ *   reason?: string;
+ *   repositoryId?: string;
+ *   run: object|null;
+ * }} input 终态失败上下文。
+ * @returns {{casKey:string;replayDigest:string;summary:string}} 可幂等发布的终态记录。
+ */
+export function createTerminalFailureCheckRecord({
+  category = "child-evidence-terminal-failure",
+  headOid,
+  pullNumber,
+  reason,
+  repositoryId = targetRepositoryId,
+  run,
+}) {
+  const runId = Number.isSafeInteger(run?.id) ? `${run.id}` : "missing";
+  const runAttempt = Number.isSafeInteger(run?.run_attempt) ? `${run.run_attempt}` : "none";
+  const runConclusion = typeof run?.conclusion === "string" ? run.conclusion : "unknown";
+  const casKey = Number.isSafeInteger(run?.id) && Number.isSafeInteger(run?.run_attempt)
+    ? createPendingCheckRecord({ headOid, pullNumber, repositoryId, run }).casKey
+    : `${repositoryId}:${headOid}:terminal:${pullNumber}:${category}`;
+  const stableReason = reason ??
+    `child evidence workflow run ${runId}/${runAttempt} 未成功。`;
+  const replayDigest = sha256CanonicalJson({
+    category,
+    headOid,
+    pullNumber,
+    reason: stableReason,
+    runAttempt,
+    runConclusion,
+    runId,
+    schemaVersion: 1,
+  });
+  return {
+    casKey,
+    replayDigest,
+    summary: JSON.stringify({
+      casKey,
+      reason: stableReason,
+      replayDigest,
+      runAttempt,
+      runConclusion,
+      runId,
+      status: "terminal-failure",
+    }),
+  };
+}
+
 /** 标记 provider 在验证期间产生了更新的 workflow run/attempt，需要从新快照重试。 */
 class WorkflowRunChangedError extends Error {
   constructor() {
@@ -621,13 +697,22 @@ async function revokePublishedSuccess(pull, error) {
   const retryable =
     error instanceof PullSnapshotChangedError ||
     error instanceof WorkflowRunChangedError;
+  const terminal = retryable
+    ? null
+    : createTerminalFailureCheckRecord({
+        category: "published-success-revocation",
+        headOid: pull.head.sha,
+        pullNumber: pull.number,
+        reason: error instanceof Error ? error.message : "Controller success 复验失败。",
+        run: null,
+      });
   await publishCheck(
     pull.head.sha,
     retryable ? "in_progress" : "completed",
     retryable ? null : "failure",
-    error instanceof Error ? error.message : "Controller success 复验失败。",
-    null,
-    null,
+    terminal?.summary ?? (error instanceof Error ? error.message : "Controller success 复验失败。"),
+    terminal?.casKey ?? null,
+    terminal?.replayDigest ?? null,
     !retryable,
   );
 }
@@ -909,6 +994,11 @@ async function publishCheck(
     replayDigest,
     status,
     summary,
+    updateCheck: async (checkId, body) =>
+      controllerGithubJson(`repos/${targetRepository}/check-runs/${checkId}`, {
+        body,
+        method: "PATCH",
+      }),
   });
 }
 
