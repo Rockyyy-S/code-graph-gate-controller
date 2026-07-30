@@ -23,6 +23,7 @@ import {
   mergeGateEvidenceArtifacts,
   runIdentityProcessTool,
   selectGateEntriesForPartition,
+  validateWin32PreflightArtifact,
   validateTrustedPnpmExecutable,
   WIN32_HOST_IDENTITY_GATE_ID,
 } from "../lib/harness.mjs";
@@ -30,6 +31,73 @@ import {
   createTrustedGitArguments,
   parseNameStatusZ,
 } from "../lib/git-context.mjs";
+
+/** 构造 Harness 可接受的最小 Win32 NTFS preflight artifact。 */
+function createWin32Preflight(overrides = {}) {
+  const selectedRoot = path.resolve("win32-preflight-root");
+  return {
+    candidateRoot: path.resolve("candidate"),
+    drive: "C",
+    driveType: "Fixed",
+    fileSystem: "NTFS",
+    getVolume: { status: 0, stderr: "", stdout: "[]", timeout: false },
+    probeDurationMs: 12,
+    probeStartedAt: "2026-07-30T00:00:00.000Z",
+    processPlatform: "win32",
+    root: { ordinary: true, reparse: false },
+    runnerTemp: path.resolve("runner-temp"),
+    schemaVersion: 1,
+    selectedRoot,
+    ...overrides,
+  };
+}
+
+test("Win32 preflight 区分非 NTFS、查询错误、超时与非 Win32 并保留实际值", () => {
+  const selectedRoot = path.resolve("win32-preflight-root");
+  const context = { gateTempDirectory: selectedRoot, platform: "win32" };
+  assert.equal(validateWin32PreflightArtifact(createWin32Preflight(), context).fileSystem, "NTFS");
+  const cases = [
+    {
+      code: "WIN32_PREFLIGHT_NON_NTFS",
+      context,
+      expected: "ReFS",
+      preflight: createWin32Preflight({ fileSystem: "ReFS" }),
+    },
+    {
+      code: "WIN32_PREFLIGHT_QUERY_ERROR",
+      context,
+      expected: "Access denied",
+      preflight: createWin32Preflight({
+        getVolume: { status: 5, stderr: "Access denied", stdout: "", timeout: false },
+      }),
+    },
+    {
+      code: "WIN32_PREFLIGHT_QUERY_TIMEOUT",
+      context,
+      expected: "timed out",
+      preflight: createWin32Preflight({
+        getVolume: { status: null, stderr: "timed out", stdout: "", timeout: true },
+      }),
+    },
+    {
+      code: "WIN32_PREFLIGHT_NON_WIN32",
+      context: { ...context, platform: "linux" },
+      expected: "linux",
+      preflight: createWin32Preflight(),
+    },
+  ];
+  for (const item of cases) {
+    assert.throws(
+      () => validateWin32PreflightArtifact(item.preflight, item.context),
+      (error) => {
+        assert.equal(error.code, item.code);
+        assert.equal(error.preflight, item.preflight);
+        assert.match(error.message, new RegExp(item.expected, "u"));
+        return true;
+      },
+    );
+  }
+});
 
 test("triggerPaths 缺失时 always applicable", () => {
   assert.equal(evaluateApplicability({ gateId: "type" }, []), "required");
@@ -251,6 +319,7 @@ test("显式可信 launcher 在无 npm_execpath 且恶意 PATH 存在时仍以�
     gateHome: root,
     gateTempDirectory: root,
     headOid: "b".repeat(40),
+    hostPathInvocationAttestationPath: path.join(root, "invocation.json"),
     trustedPnpmExecutable: validated,
     GITHUB_TOKEN: "不得泄漏",
   });
@@ -274,6 +343,10 @@ test("显式可信 launcher 在无 npm_execpath 且恶意 PATH 存在时仍以�
   assert.equal(result.stdout, "trusted");
   await assert.rejects(access(marker), /ENOENT/u);
   assert.equal(environment.CODEGRAPH_TRUSTED_PNPM_EXE, trustedPnpm);
+  assert.equal(
+    environment.CODEGRAPH_HOST_PATH_IDENTITY_ATTESTATION_PATH,
+    path.join(root, "invocation.json"),
+  );
   assert.equal(environment.npm_execpath, undefined);
   assert.equal(environment.GITHUB_TOKEN, undefined);
   assert.equal(environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN, undefined);

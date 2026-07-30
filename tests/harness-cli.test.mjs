@@ -25,12 +25,15 @@ function createArguments(overrides = {}) {
     "--gate-uid": "20001",
     "--harness-contract-version": "4",
     "--head-oid": "b".repeat(40),
+    "--host-path-invocation-attestation": path.resolve("artifacts/invocation.json"),
     "--object-format": "sha1",
     "--provider-repository-id": "1303415307",
     "--proposed-record-directory": path.resolve("trusted/proposed"),
     "--pull-number": "0",
+    "--path-sentinel-marker": path.resolve("gate-tmp/path-sentinel.marker"),
     "--trusted-record": path.resolve("trusted/registry.json"),
     "--trusted-pnpm-executable": path.resolve("trusted/pnpm.exe"),
+    "--win32-preflight-artifact": path.resolve("artifacts/win32-preflight.json"),
     "--workflow-file": "produce-gate-evidence.yml",
     "--workflow-sha": "c".repeat(40),
     ...overrides,
@@ -73,7 +76,7 @@ test("GateHarness V4 参数集合封闭且支持 push/PR 安全整数边界", ()
   assert.equal(GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3.length, 17);
   assert.equal(GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3.length, 15);
   assert.equal(GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4.length, 18);
-  assert.equal(GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4.length, 17);
+  assert.equal(GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4.length, 20);
   assert.equal(parseArguments(createArguments()).pullNumber, 0);
   assert.equal(
     parseArguments(createArguments({ "--pull-number": "42" })).pullNumber,
@@ -147,6 +150,18 @@ test("Win32 V4 强制专用 launcher、拒绝 Unix UID/GID 且合并输入必须
   assert.equal(win32.gateUid, undefined);
   assert.equal(win32.gateGid, undefined);
   assert.equal(win32.trustedPnpmExecutable, path.resolve("trusted/pnpm.exe"));
+  assert.equal(
+    win32.hostPathInvocationAttestationPath,
+    path.resolve("artifacts/invocation.json"),
+  );
+  assert.equal(
+    win32.pathSentinelMarkerPath,
+    path.resolve("gate-tmp/path-sentinel.marker"),
+  );
+  assert.equal(
+    win32.win32PreflightArtifactPath,
+    path.resolve("artifacts/win32-preflight.json"),
+  );
 
   const artifactPaths = [path.resolve("portable.json"), path.resolve("win32.json")];
   assert.deepEqual(
