@@ -4,11 +4,24 @@ import {
   ControllerRevisionDriftError,
   runControllerCycle,
 } from "./run-controller.mjs";
+import { githubJson } from "../lib/github-api.mjs";
 
 const defaultPollIntervalMs = 60_000;
 const defaultRuntimeMs = 50 * 60 * 1000;
 const defaultCycleTimeoutMs = 4 * 60 * 1000;
 const defaultRevocationWaitMs = 60_000;
+const defaultHandoffLeadMs = 60_000;
+const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
+const controllerWorkflowPath = "controller.yml";
+const controllerDefaultBranch = "main";
+
+/** 标记真实已启动 cycle 到达自身 deadline，正常 lease 边界不得构造此错误。 */
+class ControllerCycleDeadlineError extends Error {
+  constructor() {
+    super("Controller lease guardian cycle deadline 已耗尽。");
+    this.name = "ControllerCycleDeadlineError";
+  }
+}
 
 /** 标记上一轮 cycle 在撤销预算后仍未结算，禁止 guardian 启动重叠轮次。 */
 class ControllerCycleUnsettledError extends AggregateError {
@@ -31,6 +44,7 @@ export async function runControllerLeaseGuardian(options = {}) {
   const runtimeMs = options.runtimeMs ?? defaultRuntimeMs;
   const cycleTimeoutMs = options.cycleTimeoutMs ?? defaultCycleTimeoutMs;
   const revocationWaitMs = options.revocationWaitMs ?? defaultRevocationWaitMs;
+  const handoffLeadMs = options.handoffLeadMs ?? defaultHandoffLeadMs;
   if (
     !Number.isSafeInteger(pollIntervalMs) ||
     pollIntervalMs <= 0 ||
@@ -39,17 +53,24 @@ export async function runControllerLeaseGuardian(options = {}) {
     !Number.isSafeInteger(cycleTimeoutMs) ||
     cycleTimeoutMs <= 0 ||
     !Number.isSafeInteger(revocationWaitMs) ||
-    revocationWaitMs <= 0
+    revocationWaitMs <= 0 ||
+    !Number.isSafeInteger(handoffLeadMs) ||
+    handoffLeadMs <= 0 ||
+    !Number.isSafeInteger(cycleTimeoutMs + revocationWaitMs + handoffLeadMs)
   ) {
-    throw new TypeError("Controller lease guardian 的 interval/runtime/cycle timeout 必须是正安全整数。");
+    throw new TypeError("Controller lease guardian 的 interval/runtime/cycle/revocation/handoff 必须是正安全整数。");
   }
-  const deadlineAt = Date.now() + runtimeMs;
+  const leaseDeadlineAt = Date.now() + runtimeMs;
+  const requiredCycleReservationMs = cycleTimeoutMs + revocationWaitMs + handoffLeadMs;
   let lastError = null;
-  do {
+  while (Date.now() < leaseDeadlineAt) {
+    const remainingLeaseMs = leaseDeadlineAt - Date.now();
+    if (remainingLeaseMs <= requiredCycleReservationMs) {
+      break;
+    }
     try {
       await runCycleWithDeadline({
         cycleTimeoutMs,
-        deadlineAt,
         revocationWaitMs,
         runCycle: options.runCycle ?? runControllerCycle,
       });
@@ -62,19 +83,54 @@ export async function runControllerLeaseGuardian(options = {}) {
       if (lastError instanceof ControllerCycleUnsettledError) {
         throw lastError;
       }
+      if (lastError instanceof ControllerCycleDeadlineError) {
+        throw lastError;
+      }
       if (containsControllerRevisionDrift(lastError)) {
         throw lastError;
       }
     }
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) {
+    const delayBudgetMs = leaseDeadlineAt - Date.now() - requiredCycleReservationMs;
+    if (delayBudgetMs <= 0) {
       break;
     }
-    await (options.delay ?? delay)(Math.min(pollIntervalMs, remainingMs));
-  } while (Date.now() < deadlineAt);
+    await (options.delay ?? delay)(Math.min(pollIntervalMs, delayBudgetMs));
+  }
+  let handoffError = null;
+  try {
+    await (options.dispatchSuccessor ?? dispatchSuccessorController)();
+  } catch (error) {
+    handoffError = error instanceof Error
+      ? error
+      : new Error("Controller successor handoff 未知错误。");
+    console.error(`Controller successor handoff 失败：${handoffError.message}`);
+  }
+  if (handoffError !== null) {
+    throw new AggregateError(
+      lastError === null ? [handoffError] : [lastError, handoffError],
+      "Controller lease guardian successor handoff 失败。",
+    );
+  }
   if (lastError !== null) {
     throw lastError;
   }
+}
+
+/** 使用当前仓库 GITHUB_TOKEN 至多一次排队同一 concurrency group 的 successor。 */
+export async function dispatchSuccessorController(options = {}) {
+  const token = options.token ?? process.env.CONTROLLER_REPOSITORY_TOKEN;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("Controller successor handoff 缺少当前仓库 actions:write token。");
+  }
+  await (options.request ?? githubJson)(
+    `repos/${controllerRepository}/actions/workflows/${controllerWorkflowPath}/dispatches`,
+    {
+      body: { ref: controllerDefaultBranch },
+      method: "POST",
+      timeoutMs: 5_000,
+      token,
+    },
+  );
 }
 
 /** 默认分支已推进时立即结束旧 guardian，让排队的新可信 revision 接管。 */
@@ -96,28 +152,23 @@ function containsControllerRevisionDrift(error, seen = new Set()) {
 /** 以可传播 AbortSignal 的绝对 deadline 约束单轮 Controller cycle。 */
 async function runCycleWithDeadline({
   cycleTimeoutMs,
-  deadlineAt,
   revocationWaitMs,
   runCycle,
 }) {
-  const remainingMs = Math.min(cycleTimeoutMs, deadlineAt - Date.now());
-  if (remainingMs <= 0) {
-    throw new Error("Controller lease guardian cycle deadline 已耗尽。");
-  }
   const abortController = new AbortController();
   let timeout;
   const cyclePromise = Promise.resolve().then(() =>
     runCycle({
-      deadlineAt: Date.now() + remainingMs,
+      deadlineAt: Date.now() + cycleTimeoutMs,
       signal: abortController.signal,
     }),
   );
   const timeoutPromise = new Promise((resolve) => {
     timeout = setTimeout(() => {
-      const error = new Error("Controller lease guardian cycle deadline 已耗尽。");
+      const error = new ControllerCycleDeadlineError();
       abortController.abort(error);
       resolve({ error, timedOut: true });
-    }, remainingMs);
+    }, cycleTimeoutMs);
   });
   try {
     const first = await Promise.race([
