@@ -299,6 +299,10 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
     new URL("../bin/run-controller.mjs", import.meta.url),
     "utf8",
   );
+  const guardian = await readFile(
+    new URL("../bin/run-controller-lease-guardian.mjs", import.meta.url),
+    "utf8",
+  );
   const policy = await readFile(
     new URL("../lib/controller-policy.mjs", import.meta.url),
     "utf8",
@@ -306,6 +310,7 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
 
   assert.match(monitorWorkflow, /push:\s*\n\s+branches: \[main\]/u);
   assert.match(monitorWorkflow, /workflow_dispatch:\s*\n\s*schedule:/u);
+  assert.match(controllerWorkflow, /workflow_dispatch:\s*\n\s*schedule:/u);
   assert.match(monitorWorkflow, /cron: "2-59\/5 \* \* \* \*"/u);
   assert.match(controllerWorkflow, /cron: "4-59\/5 \* \* \* \*"/u);
   assert.match(
@@ -332,9 +337,19 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
   assert.match(controller, /token: controllerRepositoryToken/u);
   assert.match(controller, /timeoutMs: 5_000/u);
   assert.match(controller, /monitorRefreshState: controllerMonitorRefreshState/u);
+  assert.match(
+    guardian,
+    /actions\/workflows\/\$\{controllerWorkflowPath\}\/dispatches/u,
+  );
+  assert.match(guardian, /body: \{ ref: controllerDefaultBranch \}/u);
+  assert.match(guardian, /process\.env\.CONTROLLER_REPOSITORY_TOKEN/u);
+  assert.match(guardian, /timeoutMs: 5_000,\s*\n\s+token,/u);
+  assert.match(guardian, /timeoutMs: 5_000/u);
+  assert.match(guardian, /requiredCycleReservationMs/u);
+  assert.match(guardian, /ControllerCycleDeadlineError/u);
   assert.match(policy, /6 \* 60 \* 1000/u);
   assert.match(policy, /15 \* 60 \* 1000/u);
-  assert.doesNotMatch(controllerWorkflow, /workflow_dispatch:/u);
+  assert.doesNotMatch(controllerWorkflow, /workflow_dispatch:\s*\n\s+inputs:/u);
   assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:\s*\n\s+inputs:/u);
 });
 
