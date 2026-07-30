@@ -3,14 +3,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3,
+  GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4,
   GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3,
+  GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4,
 } from "../bin/produce-gate-evidence.mjs";
 import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "807c28187ae471c27aeea2f26a254fbe1e7fd691";
+const trustedHarnessSha = "2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 const pnpmWin32ArchiveSha256 =
   "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";
@@ -151,6 +153,7 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   );
   assert.match(workflow, /--candidate-root \/tmp\/gatecandidate-root\/worktree/u);
   assert.match(workflow, /--execution-partition portable/u);
+  assert.match(workflow, /--harness-contract-version 4/u);
   assert.match(workflow, /sudo rm -rf -- \/tmp\/gatecandidate-root/u);
   assert.match(workflow, /install -d -m 0700 artifacts/u);
   assert.match(workflow, /--gate-uid 20001/u);
@@ -179,6 +182,8 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /git config --global core\.autocrlf false/u);
   assert.match(win32Job, /git config --global core\.eol lf/u);
   assert.match(win32Job, /--execution-partition', 'win32'/u);
+  assert.match(win32Job, /--harness-contract-version', '4'/u);
+  assert.match(win32Job, /--trusted-pnpm-executable', \$env:TRUSTED_PNPM_EXE/u);
   assert.doesNotMatch(win32Job, /--gate-(?:uid|gid)/u);
   assert.match(win32Job, /pnpm-win32-x64\.zip/u);
   assert.match(win32Job, new RegExp(`PNPM_ARCHIVE_SHA256: ${pnpmWin32ArchiveSha256}`, "u"));
@@ -194,7 +199,17 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /\$actualEntrySha -ne \$env:PNPM_ENTRY_SHA256/u);
   assert.match(win32Job, /\$trustedPnpm = \$env:TRUSTED_PNPM_EXE/u);
   assert.match(win32Job, /\[IO\.Path\]::IsPathFullyQualified\(\$trustedPnpm\)/u);
+  assert.match(win32Job, /\[IO\.Path\]::GetFileName\(\$trustedPnpm\) -ine 'pnpm\.exe'/u);
+  assert.match(win32Job, /\$trustedItem\.PSIsContainer/u);
+  assert.match(win32Job, /\[IO\.FileAttributes\]::ReparsePoint/u);
+  assert.match(win32Job, /可信 pnpm launcher SHA-256 漂移/u);
+  assert.match(win32Job, /\$pnpmVersion\.Trim\(\) -ne '11\.12\.0'/u);
+  assert.ok(
+    win32Job.indexOf("Revalidate trusted pnpm launcher for evidence") <
+      win32Job.indexOf("Produce Win32 host identity evidence"),
+  );
   assert.doesNotMatch(win32Job, /Expand-Archive|GITHUB_PATH|TRUSTED_PNPM_BIN/u);
+  assert.doesNotMatch(win32Job, /PATH=.*TRUSTED_PNPM/u);
   assert.doesNotMatch(win32Job, /^\s*(?:&\s*)?pnpm(?:\.exe)?\s/mu);
   assert.match(
     win32Job,
@@ -303,10 +318,10 @@ test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续
   assert.doesNotMatch(monitorWorkflow, /workflow_dispatch:\s*\n\s+inputs:/u);
 });
 
-test("阶段 B producer 固定 Harness V3 平台分区并传入 proposal/PR 参数", async () => {
+test("阶段 B producer 显式升级 Harness V4 并保留 V3 参数边界", async () => {
   const workflow = await readFile(workflowPath, "utf8");
 
-  assert.equal(GATE_HARNESS_CONTRACT_VERSION, 3);
+  assert.equal(GATE_HARNESS_CONTRACT_VERSION, 4);
   assert.deepEqual(GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3, [
     "--artifact-directory",
     "--base-oid",
@@ -331,6 +346,18 @@ test("阶段 B producer 固定 Harness V3 平台分区并传入 proposal/PR 参�
     GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3.filter(
       (name) => name !== "--gate-gid" && name !== "--gate-uid",
     ),
+  );
+  assert.deepEqual(
+    GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4,
+    [...GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3, "--harness-contract-version"].sort(),
+  );
+  assert.deepEqual(
+    GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4,
+    [
+      ...GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3,
+      "--harness-contract-version",
+      "--trusted-pnpm-executable",
+    ].sort(),
   );
   assert.match(workflow, /--pull-number "\$PULL_NUMBER"/u);
   assert.match(
