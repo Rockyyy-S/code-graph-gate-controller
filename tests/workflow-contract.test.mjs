@@ -12,7 +12,7 @@ import { GATE_HARNESS_CONTRACT_VERSION } from "../lib/harness.mjs";
 const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3";
+const trustedHarnessSha = "368328f272125c62922d0b642d95efe31a6ae9a9";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 const pnpmWin32ArchiveSha256 =
   "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";
@@ -183,13 +183,28 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /git config --global core\.eol lf/u);
   assert.match(win32Job, /--execution-partition', 'win32'/u);
   assert.match(win32Job, /--harness-contract-version', '4'/u);
+  assert.match(
+    win32Job,
+    /--host-path-invocation-attestation', \$env:HOST_PATH_INVOCATION_ATTESTATION/u,
+  );
+  assert.match(win32Job, /--path-sentinel-marker', \$env:PATH_SENTINEL_MARKER/u);
   assert.match(win32Job, /--trusted-pnpm-executable', \$env:TRUSTED_PNPM_EXE/u);
+  assert.match(win32Job, /--win32-preflight-artifact', \$env:WIN32_PREFLIGHT_ARTIFACT/u);
   assert.doesNotMatch(win32Job, /--gate-(?:uid|gid)/u);
   assert.match(win32Job, /pnpm-win32-x64\.zip/u);
   assert.match(win32Job, new RegExp(`PNPM_ARCHIVE_SHA256: ${pnpmWin32ArchiveSha256}`, "u"));
   assert.match(win32Job, new RegExp(`PNPM_ENTRY_SHA256: ${pnpmWin32EntrySha256}`, "u"));
   assert.match(win32Job, new RegExp(`PNPM_ENTRY_SIZE: '${pnpmWin32EntrySize}'`, "u"));
   assert.match(win32Job, /Get-FileHash -Algorithm SHA256/u);
+  assert.match(win32Job, /Get-Volume -ErrorAction Stop/u);
+  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 10/u);
+  assert.match(win32Job, /fileSystem = \$null/u);
+  assert.match(win32Job, /DriveType -ne 'Fixed'/u);
+  assert.match(win32Job, /FileSystem -ne 'NTFS'/u);
+  assert.match(win32Job, /WIN32_PREFLIGHT_ARTIFACT=\$artifactPath/u);
+  assert.match(win32Job, /GATE_TEMP=\$\(\$report\.selectedRoot\)/u);
+  assert.match(win32Job, /TEMP=\$\(\$report\.selectedRoot\)/u);
+  assert.match(win32Job, /TMPDIR=\$\(\$report\.selectedRoot\)/u);
   assert.match(
     win32Job,
     /node trusted-harness\/bin\/install-trusted-pnpm-win32\.mjs --archive \$archive --trusted-root \$trustedRoot/u,
@@ -204,6 +219,11 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /\[IO\.FileAttributes\]::ReparsePoint/u);
   assert.match(win32Job, /可信 pnpm launcher SHA-256 漂移/u);
   assert.match(win32Job, /\$pnpmVersion\.Trim\(\) -ne '11\.12\.0'/u);
+  assert.match(win32Job, /Get-Command pnpm -All/u);
+  assert.match(win32Job, /Remove-Item Env:npm_execpath/u);
+  assert.match(win32Job, /PATH_SENTINEL_MARKER=\$sentinelMarker/u);
+  assert.match(win32Job, /PATH=\$sentinelRoot;\$env:PATH/u);
+  assert.match(win32Job, /恶意 PATH pnpm sentinel 被调用/u);
   assert.ok(
     win32Job.indexOf("Revalidate trusted pnpm launcher for evidence") <
       win32Job.indexOf("Produce Win32 host identity evidence"),
@@ -356,7 +376,10 @@ test("阶段 B producer 显式升级 Harness V4 并保留 V3 参数边界", asyn
     [
       ...GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3,
       "--harness-contract-version",
+      "--host-path-invocation-attestation",
+      "--path-sentinel-marker",
       "--trusted-pnpm-executable",
+      "--win32-preflight-artifact",
     ].sort(),
   );
   assert.match(workflow, /--pull-number "\$PULL_NUMBER"/u);
