@@ -166,7 +166,7 @@ test("sequence=3 可信记录绑定 gate 实现摘要", () => {
   );
 });
 
-test("可信 registry sequence=22 正式提升 Win32 Job 终态与 NTFS preflight 根", async () => {
+test("可信 registry sequence=23 仅轮换 proof-forwarding producer 根", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -184,7 +184,7 @@ test("可信 registry sequence=22 正式提升 Win32 Job 终态与 NTFS prefligh
   );
 
   validateTrustedRegistryRecord(record);
-  assert.equal(record.sequence, 22);
+  assert.equal(record.sequence, 23);
   assert.equal(record.sourceCommit, "3a99068bcbd3b1313d7ca4e5478ac194a93010c0");
   assert.equal(
     record.gateImplementationDigest,
@@ -196,7 +196,7 @@ test("可信 registry sequence=22 正式提升 Win32 Job 终态与 NTFS prefligh
   );
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
-  assert.equal(approval.producerWorkflowSha, "685e81e36e775fe12399d0d7b7e95fa837323254");
+  assert.equal(approval.producerWorkflowSha, "67b35a8c1516759c680c5835c1956cdd623f7476");
   assert.doesNotThrow(() =>
     validateTrustedRegistryApproval({
       approval,
@@ -208,7 +208,7 @@ test("可信 registry sequence=22 正式提升 Win32 Job 终态与 NTFS prefligh
   );
 });
 
-test("sequence 22 当前根只选择精确 attempt 12 sequence 23 proposal", async () => {
+test("sequence 23 当前根只选择精确 attempt 14 sequence 24 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -216,18 +216,18 @@ test("sequence 22 当前根只选择精确 attempt 12 sequence 23 proposal", asy
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
       currentRecord,
-      expectedProducerWorkflowSha: "685e81e36e775fe12399d0d7b7e95fa837323254",
-      now: Date.parse("2026-07-30T20:41:00+08:00"),
+      expectedProducerWorkflowSha: "67b35a8c1516759c680c5835c1956cdd623f7476",
+      now: Date.parse("2026-07-31T07:49:00+08:00"),
     },
   );
 
-  assert.equal(currentRecord.sequence, 22);
+  assert.equal(currentRecord.sequence, 23);
   assert.equal(proposals.length, 1);
-  assert.equal(proposals[0].record.sequence, 23);
+  assert.equal(proposals[0].record.sequence, 24);
   assert.equal(proposals[0].record.pullNumber, 9);
   assert.equal(
     proposals[0].record.headOid,
-    "a8b7e168b2838bca5ca0d586801ebee8f38dee04",
+    "dac1ee67280ad0f17d3d7e05acb5610b5f1f9c00",
   );
   assert.equal(
     proposals[0].record.baseGateRegistryDigest,
@@ -235,7 +235,7 @@ test("sequence 22 当前根只选择精确 attempt 12 sequence 23 proposal", asy
   );
   assert.equal(
     proposals[0].record.gateRegistryDigest,
-    "16f0ad98a2ab0252c980b39896745e59cf49c6161f21399a2f55a5788f5ffb4c",
+    "9b9ff95b591a5cec4105855876e487335fbc2d2749cd39cc038b6022bd0f2ef9",
   );
   assert.equal(
     proposals[0].record.gateImplementationDigest,
@@ -243,7 +243,7 @@ test("sequence 22 当前根只选择精确 attempt 12 sequence 23 proposal", asy
   );
   assert.equal(
     proposals[0].approval.producerWorkflowSha,
-    "685e81e36e775fe12399d0d7b7e95fa837323254",
+    "67b35a8c1516759c680c5835c1956cdd623f7476",
   );
 });
 
