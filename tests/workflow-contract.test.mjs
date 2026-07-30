@@ -13,7 +13,7 @@ const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", i
 const harnessPath = new URL("../lib/harness.mjs", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "368328f272125c62922d0b642d95efe31a6ae9a9";
+const trustedHarnessSha = "97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 const pnpmWin32ArchiveSha256 =
   "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";

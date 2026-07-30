@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
+          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -357,7 +357,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
+          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -680,7 +680,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 368328f272125c62922d0b642d95efe31a6ae9a9
+          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Download portable unsigned evidence into a clean runner
