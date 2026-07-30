@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import {
+  access,
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
+import { sha256CanonicalJson, sha256Hex } from "../lib/canonical-json.mjs";
 import {
   createGateEnvironment,
   createGateRuntimePaths,
@@ -13,6 +23,7 @@ import {
   mergeGateEvidenceArtifacts,
   runIdentityProcessTool,
   selectGateEntriesForPartition,
+  validateTrustedPnpmExecutable,
   WIN32_HOST_IDENTITY_GATE_ID,
 } from "../lib/harness.mjs";
 import {
@@ -197,6 +208,159 @@ test("嵌套 pnpm 继承 hooks 与依赖二次安装禁用环境", () => {
   assert.equal(environment.PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS, "false");
   assert.equal(environment.PNPM_CONFIG_IGNORE_PNPMFILE, "true");
   assert.equal(environment.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN, "false");
+});
+
+test("显式可信 launcher 在无 npm_execpath 且恶意 PATH 存在时仍以绝对路径执行", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "trusted-pnpm-harness-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const trustedDirectory = path.join(root, "trusted");
+  const maliciousDirectory = path.join(root, "malicious");
+  await Promise.all([
+    mkdir(trustedDirectory),
+    mkdir(maliciousDirectory),
+  ]);
+  const trustedPnpm = path.join(trustedDirectory, "pnpm.exe");
+  await copyFile(process.execPath, trustedPnpm);
+  await chmod(trustedPnpm, 0o755);
+  const trustedBytes = await readFile(trustedPnpm);
+  const validated = await validateTrustedPnpmExecutable(trustedPnpm, {
+    expectedSha256: sha256Hex(trustedBytes),
+    expectedSize: trustedBytes.length,
+    execFileImpl: async (executable, args, options) => {
+      assert.equal(executable, trustedPnpm);
+      assert.deepEqual(args, ["--version"]);
+      assert.equal(options.shell, false);
+      return { stderr: "", stdout: "11.12.0\n" };
+    },
+  });
+  const marker = path.join(root, "malicious.marker");
+  const maliciousPnpm = process.platform === "win32"
+    ? path.join(maliciousDirectory, "pnpm.cmd")
+    : path.join(maliciousDirectory, "pnpm");
+  await writeFile(
+    maliciousPnpm,
+    process.platform === "win32"
+      ? `@echo off\r\necho malicious>"${marker}"\r\nexit /b 99\r\n`
+      : `#!/bin/sh\nprintf malicious > '${marker}'\nexit 99\n`,
+    "utf8",
+  );
+  await chmod(maliciousPnpm, 0o755);
+  const environment = createGateEnvironment({
+    baseOid: "a".repeat(40),
+    executionPartition: "win32",
+    gateHome: root,
+    gateTempDirectory: root,
+    headOid: "b".repeat(40),
+    trustedPnpmExecutable: validated,
+    GITHUB_TOKEN: "不得泄漏",
+  });
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      "import { spawnSync } from 'node:child_process'; const child = spawnSync(process.env.CODEGRAPH_TRUSTED_PNPM_EXE, ['--eval', \"process.stdout.write('trusted')\"], { encoding: 'utf8', shell: false }); process.stdout.write(child.stdout); process.exit(child.status ?? 1);",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...environment,
+        PATH: `${maliciousDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      shell: false,
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "trusted");
+  await assert.rejects(access(marker), /ENOENT/u);
+  assert.equal(environment.CODEGRAPH_TRUSTED_PNPM_EXE, trustedPnpm);
+  assert.equal(environment.npm_execpath, undefined);
+  assert.equal(environment.GITHUB_TOKEN, undefined);
+  assert.equal(environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN, undefined);
+  assert.equal(environment.PATH.includes(trustedDirectory), false);
+});
+
+test("可信 launcher 对路径、类型、reparse、大小、摘要与版本漂移全部 fail closed", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "trusted-pnpm-negative-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const trustedPnpm = path.join(root, "pnpm.exe");
+  await writeFile(trustedPnpm, "trusted-bytes", "utf8");
+  const expectedSha256 = sha256Hex(Buffer.from("trusted-bytes"));
+  const validDependencies = {
+    expectedSha256,
+    expectedSize: Buffer.byteLength("trusted-bytes"),
+    execFileImpl: async () => ({ stderr: "", stdout: "11.12.0\n" }),
+  };
+  await assert.rejects(
+    validateTrustedPnpmExecutable("pnpm.exe", validDependencies),
+    /参数无效/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(path.join(root, "trusted.exe"), validDependencies),
+    /参数无效/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(path.join(root, "missing", "pnpm.exe"), validDependencies),
+    /ENOENT/u,
+  );
+  const directoryLauncher = path.join(root, "directory", "pnpm.exe");
+  await mkdir(directoryLauncher, { recursive: true });
+  await assert.rejects(
+    validateTrustedPnpmExecutable(directoryLauncher, validDependencies),
+    /普通非 reparse/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(trustedPnpm, {
+      ...validDependencies,
+      lstatImpl: async () => ({
+        isFile: () => true,
+        isSymbolicLink: () => true,
+        size: Buffer.byteLength("trusted-bytes"),
+      }),
+    }),
+    /普通非 reparse/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(trustedPnpm, {
+      ...validDependencies,
+      expectedSize: Buffer.byteLength("trusted-bytes") + 1,
+    }),
+    /普通非 reparse/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(trustedPnpm, {
+      ...validDependencies,
+      expectedSha256: "0".repeat(64),
+    }),
+    /SHA-256 漂移/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(trustedPnpm, {
+      ...validDependencies,
+      execFileImpl: async () => ({ stderr: "", stdout: "11.12.1\n" }),
+    }),
+    /版本漂移/u,
+  );
+  await assert.rejects(
+    validateTrustedPnpmExecutable(trustedPnpm, {
+      ...validDependencies,
+      realpathImpl: async () => path.join(root, "redirected", "pnpm.exe"),
+    }),
+    /重定向/u,
+  );
+});
+
+test("portable 分区不注入 Win32 launcher 且保持现有环境行为", () => {
+  const environment = createGateEnvironment({
+    baseOid: "a".repeat(40),
+    executionPartition: "portable",
+    gateHome: "/tmp/gate-home",
+    gateTempDirectory: "/tmp/gate-tmp",
+    headOid: "b".repeat(40),
+    trustedPnpmExecutable: "/tmp/pnpm.exe",
+  });
+  assert.equal(environment.CODEGRAPH_TRUSTED_PNPM_EXE, undefined);
+  assert.equal(environment.PATH, process.env.PATH);
 });
 
 test("每个 gate 使用短且独立的 HOME 与 TMP 槽位", () => {

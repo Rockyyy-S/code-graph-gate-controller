@@ -34,6 +34,21 @@ export const GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3 = Object.freeze([
   ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V3,
 ].sort());
 
+/** GateHarness V4 显式声明版本，并仅为 Win32 分区增加专用可信 launcher。 */
+export const GATE_HARNESS_COMMON_ARGUMENT_NAMES_V4 = Object.freeze([
+  ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V3,
+  "--harness-contract-version",
+].sort());
+export const GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4 = Object.freeze([
+  ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V4,
+  "--gate-gid",
+  "--gate-uid",
+].sort());
+export const GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4 = Object.freeze([
+  ...GATE_HARNESS_COMMON_ARGUMENT_NAMES_V4,
+  "--trusted-pnpm-executable",
+].sort());
+
 /** 合并命令只接受绝对输出目录与 JSON 编码的绝对输入路径数组。 */
 export const GATE_EVIDENCE_MERGE_ARGUMENT_NAMES_V1 = Object.freeze([
   "--artifact-directory",
@@ -42,17 +57,34 @@ export const GATE_EVIDENCE_MERGE_ARGUMENT_NAMES_V1 = Object.freeze([
 
 /** 将成对 CLI 参数解析为封闭选项对象。 */
 export function parseArguments(argv) {
+  return parseArgumentsForContract(argv, 4);
+}
+
+/** 保留既有 V3 参数解析语义，供不可变历史 producer 与兼容测试明确引用。 */
+export function parseArgumentsV3(argv) {
+  return parseArgumentsForContract(argv, 3);
+}
+
+/** 按显式合同版本解析平台分区参数，禁止 V3/V4 字段静默混用。 */
+function parseArgumentsForContract(argv, contractVersion) {
   const values = parsePairs(argv, "GateHarness");
   const executionPartition = values.get("--execution-partition");
-  const expectedNames = executionPartition === "portable"
-    ? GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3
-    : executionPartition === "win32"
-      ? GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3
+  const expectedNames = contractVersion === 4
+    ? executionPartition === "portable"
+      ? GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V4
+      : executionPartition === "win32"
+        ? GATE_HARNESS_WIN32_ARGUMENT_NAMES_V4
+        : null
+    : executionPartition === "portable"
+      ? GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3
+      : executionPartition === "win32"
+        ? GATE_HARNESS_WIN32_ARGUMENT_NAMES_V3
       : null;
   if (
     expectedNames === null ||
     values.size !== expectedNames.length ||
-    expectedNames.some((key) => !values.has(key))
+    expectedNames.some((key) => !values.has(key)) ||
+    (contractVersion === 4 && values.get("--harness-contract-version") !== "4")
   ) {
     throw new Error("GateHarness 参数缺失或包含未知字段。\n");
   }
@@ -79,6 +111,12 @@ export function parseArguments(argv) {
     ),
     pullNumber: parseNonNegativeInteger(values.get("--pull-number"), "--pull-number"),
     trustedRecordPath: path.resolve(values.get("--trusted-record")),
+    trustedPnpmExecutable: executionPartition === "win32" && contractVersion === 4
+      ? parseAbsolutePath(
+          values.get("--trusted-pnpm-executable"),
+          "--trusted-pnpm-executable",
+        )
+      : undefined,
     workflowFile: values.get("--workflow-file"),
     workflowSha: values.get("--workflow-sha"),
   };
