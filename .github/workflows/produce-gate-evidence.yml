@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
+          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -287,6 +287,7 @@ jobs:
             --gate-home /tmp/gatecandidate-home \
             --gate-temp-directory /g \
             --gate-uid 20001 \
+            --harness-contract-version 4 \
             --head-oid "$HEAD_OID" \
             --object-format "$OBJECT_FORMAT" \
             --provider-repository-id "$PROVIDER_REPOSITORY_ID" \
@@ -356,7 +357,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
+          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -444,6 +445,40 @@ jobs:
           "GATE_TEMP=$gateTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "HARNESS_HOME=$harnessHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Revalidate trusted pnpm launcher for evidence
+        env:
+          PNPM_ENTRY_SHA256: 0a8b6b9d6f391bb83e868a3f951eec74fb8f745c176fce523a9359f40b20fb7b
+          PNPM_ENTRY_SIZE: '98099528'
+        shell: pwsh
+        run: |
+          $trustedPnpm = $env:TRUSTED_PNPM_EXE
+          if (
+            -not [IO.Path]::IsPathFullyQualified($trustedPnpm) -or
+            [IO.Path]::GetFileName($trustedPnpm) -ine 'pnpm.exe' -or
+            -not [IO.File]::Exists($trustedPnpm)
+          ) {
+            throw '可信 pnpm launcher 不是绝对本地 pnpm.exe。'
+          }
+          $trustedItem = Get-Item -LiteralPath $trustedPnpm -Force
+          if (
+            $trustedItem.PSIsContainer -or
+            $trustedItem.Length -ne [int64]$env:PNPM_ENTRY_SIZE -or
+            ($trustedItem.Attributes -band [IO.FileAttributes]::ReparsePoint)
+          ) {
+            throw '可信 pnpm launcher 不是固定大小的普通非 reparse 文件。'
+          }
+          $resolvedTrustedPnpm = (Resolve-Path -LiteralPath $trustedPnpm).Path
+          if (-not [IO.Path]::GetFullPath($resolvedTrustedPnpm).Equals(
+            [IO.Path]::GetFullPath($trustedPnpm),
+            [StringComparison]::OrdinalIgnoreCase
+          )) {
+            throw '可信 pnpm launcher 经解析后发生重定向。'
+          }
+          $actualEntrySha = (Get-FileHash -Algorithm SHA256 -LiteralPath $trustedPnpm).Hash.ToLowerInvariant()
+          if ($actualEntrySha -ne $env:PNPM_ENTRY_SHA256) { throw '可信 pnpm launcher SHA-256 漂移。' }
+          $pnpmVersion = & $trustedPnpm --version
+          if ($LASTEXITCODE -ne 0 -or $pnpmVersion.Trim() -ne '11.12.0') { throw '可信 pnpm launcher 版本漂移。' }
+
       - name: Produce Win32 host identity evidence
         env:
           BASE_OID: ${{ inputs.base_oid }}
@@ -463,12 +498,14 @@ jobs:
             '--execution-partition', 'win32',
             '--gate-home', $env:GATE_HOME,
             '--gate-temp-directory', $env:GATE_TEMP,
+            '--harness-contract-version', '4',
             '--head-oid', $env:HEAD_OID,
             '--object-format', $env:OBJECT_FORMAT,
             '--provider-repository-id', $env:PROVIDER_REPOSITORY_ID,
             '--proposed-record-directory', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/proposed'),
             '--pull-number', $env:PULL_NUMBER,
             '--trusted-record', (Join-Path $env:GITHUB_WORKSPACE 'trusted-state/trusted/registry.json'),
+            '--trusted-pnpm-executable', $env:TRUSTED_PNPM_EXE,
             '--workflow-file', 'produce-gate-evidence.yml',
             '--workflow-sha', $env:PRODUCER_WORKFLOW_SHA
           )
@@ -509,7 +546,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 807c28187ae471c27aeea2f26a254fbe1e7fd691
+          ref: 2c07a1810ce8bdb59cc0f236e5b285a3e8b427e3
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Download portable unsigned evidence into a clean runner
