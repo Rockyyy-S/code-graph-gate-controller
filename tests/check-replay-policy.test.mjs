@@ -312,6 +312,47 @@ test("旧 orphan pending 会被已存在的同 run terminal success 结构化 su
   assert.equal(plan.action, "transition");
 });
 
+test("旧 controller-invalid terminal 会归属当前唯一 PR/head lifecycle 并被 success supersede", () => {
+  const success = {
+    conclusion: "success",
+    id: 20,
+    output: {
+      summary: JSON.stringify({
+        casKey,
+        checkLifecycleKey: lifecycleKey,
+        replayDigest: "b".repeat(64),
+      }),
+    },
+    status: "completed",
+  };
+  const legacyDriftFailure = {
+    conclusion: "failure",
+    id: 21,
+    output: {
+      summary: JSON.stringify({
+        casKey: "1303415307:head:controller-invalid:23",
+        replayDigest: "c".repeat(64),
+        status: "drift-monitor-invalid",
+      }),
+    },
+    status: "completed",
+  };
+  const plan = planCheckLifecycle({
+    casKey,
+    checkLifecycleKey: lifecycleKey,
+    checks: [success, legacyDriftFailure],
+    conclusion: "success",
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "b".repeat(64),
+    status: "completed",
+  });
+
+  assert.equal(plan.action, "idempotent");
+  assert.equal(plan.check.id, 20);
+  assert.deepEqual(plan.supersededChecks.map((check) => check.id), [21]);
+});
+
 test("重启或 lease successor 读取完整 lifecycle summary 后精确幂等", () => {
   const terminal = {
     completed_at: "2026-07-31T00:00:00Z",
