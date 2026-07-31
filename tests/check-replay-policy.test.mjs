@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyCheckReplay,
+  planCheckLifecycle,
   planCheckReplay,
 } from "../lib/check-replay-policy.mjs";
 
 const casKey = "1303415307:head:context:implementation:3";
+const lifecycleKey = "check-lifecycle-v1:1303415307:9:head:architecture-required";
 
 /** 创建 Controller App 历史 check fixture。 */
 function createCheck({
@@ -206,4 +208,157 @@ test("既有 terminal failure 即使后面存在旧 storm 记录也保持幂等"
     }),
     "idempotent",
   );
+});
+
+test("独立 lifecycle key 允许 success 用不同 result CAS 原位接管 pending", () => {
+  const pending = {
+    conclusion: null,
+    id: 10,
+    output: {
+      summary: JSON.stringify({
+        casKey: "1303415307:head:pending:9:30592045649:1",
+        checkLifecycleKey: lifecycleKey,
+        replayDigest: "a".repeat(64),
+        status: "pending",
+      }),
+    },
+    status: "in_progress",
+  };
+  const plan = planCheckLifecycle({
+    casKey,
+    checkLifecycleKey: lifecycleKey,
+    checks: [pending],
+    conclusion: "success",
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "b".repeat(64),
+    status: "completed",
+  });
+
+  assert.equal(plan.action, "transition");
+  assert.equal(plan.check, pending);
+  assert.deepEqual(plan.supersededChecks, []);
+});
+
+test("旧 missing:none pending 在首个 run 出现后按 PR/head 被认领", () => {
+  const missingPending = {
+    conclusion: null,
+    id: 11,
+    output: {
+      summary: JSON.stringify({
+        casKey: "1303415307:head:pending:9:missing:none",
+        replayDigest: "a".repeat(64),
+        status: "pending",
+      }),
+    },
+    status: "in_progress",
+  };
+  const plan = planCheckLifecycle({
+    casKey: "1303415307:head:pending:9:30592045649:1",
+    checkLifecycleKey: lifecycleKey,
+    checks: [missingPending],
+    conclusion: null,
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "b".repeat(64),
+    status: "in_progress",
+  });
+
+  assert.equal(plan.action, "transition");
+  assert.equal(plan.check.id, 11);
+});
+
+test("旧 orphan pending 会被已存在的同 run terminal success 结构化 supersede", () => {
+  const orphan = {
+    conclusion: null,
+    id: 91036295709,
+    output: {
+      summary: JSON.stringify({
+        casKey: "1303415307:head:pending:9:30592045649:1",
+        replayDigest: "a".repeat(64),
+        status: "pending",
+      }),
+    },
+    status: "in_progress",
+  };
+  const terminal = {
+    conclusion: "success",
+    id: 91036644980,
+    output: {
+      summary: JSON.stringify({
+        providerEvidenceRecord: {
+          headOid: "head",
+          workflowRef: "Rockyyy-S/code-graph/.github/workflows/architecture-required.yml@refs/pull/9/merge",
+        },
+        replayDigest: "b".repeat(64),
+        result: { casKey },
+      }),
+    },
+    status: "completed",
+  };
+  const plan = planCheckLifecycle({
+    casKey,
+    checkLifecycleKey: lifecycleKey,
+    checks: [orphan, terminal],
+    conclusion: "success",
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "b".repeat(64),
+    status: "completed",
+  });
+
+  assert.equal(plan.check.id, 91036644980);
+  assert.deepEqual(plan.supersededChecks.map((check) => check.id), [91036295709]);
+  assert.equal(plan.action, "transition");
+});
+
+test("重启或 lease successor 读取完整 lifecycle summary 后精确幂等", () => {
+  const terminal = {
+    completed_at: "2026-07-31T00:00:00Z",
+    conclusion: "failure",
+    id: 12,
+    output: {
+      summary: JSON.stringify({
+        casKey,
+        checkLifecycleKey: lifecycleKey,
+        replayDigest: "c".repeat(64),
+      }),
+    },
+    status: "completed",
+  };
+  const plan = planCheckLifecycle({
+    casKey,
+    checkLifecycleKey: lifecycleKey,
+    checks: [terminal],
+    conclusion: "failure",
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "c".repeat(64),
+    status: "completed",
+  });
+
+  assert.equal(plan.action, "idempotent");
+  assert.equal(plan.check.id, 12);
+});
+
+test("无法结构化归属的活动 Controller check 必须报告 lifecycle conflict", () => {
+  const unknown = {
+    conclusion: null,
+    id: 13,
+    output: { summary: "legacy unknown pending" },
+    status: "in_progress",
+  };
+  const plan = planCheckLifecycle({
+    casKey,
+    checkLifecycleKey: lifecycleKey,
+    checks: [unknown],
+    conclusion: "success",
+    headOid: "head",
+    pullNumber: 9,
+    replayDigest: "d".repeat(64),
+    status: "completed",
+  });
+
+  assert.deepEqual(plan.conflictingChecks, [unknown]);
+  assert.equal(plan.action, "publish");
 });
