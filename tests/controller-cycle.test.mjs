@@ -6,9 +6,11 @@ import {
   assertPullOwnsUniqueOpenHead,
   assertUniqueOpenPullHeads,
   closePublishedSuccess,
+  createCheckLifecycleKey,
   createPendingCheckRecord,
   createTerminalFailureCheckRecord,
   executeControllerCycle,
+  mapProviderRunConclusion,
   revalidatePublishedSuccess,
   sameCurrentPullSnapshot,
   samePullIdentity,
@@ -157,6 +159,14 @@ test("同一 PR/head/child run 的 pending check 使用稳定幂等键", () => {
     createPendingCheckRecord({ ...input, run: { ...input.run, id: 101 } }).casKey,
     first.casKey,
   );
+  assert.equal(
+    createPendingCheckRecord({ ...input, run: { ...input.run, id: 101 } }).checkLifecycleKey,
+    first.checkLifecycleKey,
+  );
+  assert.equal(
+    first.checkLifecycleKey,
+    createCheckLifecycleKey(input),
+  );
 });
 
 test("child run terminal failure 复用 pending CAS 并生成稳定 replay digest", () => {
@@ -180,6 +190,9 @@ test("child run terminal failure 复用 pending CAS 并生成稳定 replay diges
   assert.notEqual(first.replayDigest, pending.replayDigest);
   assert.deepEqual(JSON.parse(first.summary), {
     casKey: first.casKey,
+    checkLifecycleKey: first.checkLifecycleKey,
+    headOid: input.headOid,
+    pullNumber: input.pullNumber,
     reason: "child evidence workflow run 30535583048/1 未成功。",
     replayDigest: first.replayDigest,
     runAttempt: "1",
@@ -187,6 +200,12 @@ test("child run terminal failure 复用 pending CAS 并生成稳定 replay diges
     runId: "30535583048",
     status: "terminal-failure",
   });
+});
+
+test("timeout 与 cancelled 保留 provider 原生非成功 conclusion", () => {
+  assert.equal(mapProviderRunConclusion("timed_out"), "timed_out");
+  assert.equal(mapProviderRunConclusion("cancelled"), "cancelled");
+  assert.equal(mapProviderRunConclusion("failure"), "failure");
 });
 
 test("success 发布后按 run、PR、monitor 顺序再次闭合 provider 状态", async () => {

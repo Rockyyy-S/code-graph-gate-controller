@@ -59,6 +59,21 @@ test("Controller terminal failure 通过 Checks PATCH 原位终结 pending", asy
   assert.match(controller, /method: "PATCH"/u);
 });
 
+test("Controller check lifecycle 独立于 result CAS，并按 ID readback 验证", async () => {
+  const [controller, publisher] = await Promise.all([
+    readFile(new URL("../bin/run-controller.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../lib/controller-check-publisher.mjs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(controller, /check-lifecycle-v1/u);
+  assert.match(controller, /checkLifecycleKey: createCheckLifecycleKey/u);
+  assert.match(controller, /assertFreshDriftMonitorReadOnly/u);
+  assert.match(publisher, /GET-readback-verify/u);
+  assert.match(publisher, /completed_at/u);
+  assert.match(publisher, /supersededByCheckId/u);
+  assert.match(publisher, /supersededByLifecycleKey/u);
+});
+
 test("reusable producer 固定检出已批准的不可变 GateHarness", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const checkoutBlock = /- name: Checkout immutable GateHarness[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];

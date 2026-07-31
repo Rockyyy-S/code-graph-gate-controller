@@ -322,7 +322,7 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
     await publishCheckForStablePull(
       pull,
       "completed",
-      "failure",
+      mapProviderRunConclusion(run.conclusion),
       terminal.summary,
       terminal.casKey,
       terminal.replayDigest,
@@ -467,7 +467,14 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       gateEvidenceDigests: result.gateEvidenceDigests ?? [],
       trustedSequence: result.trustedSequence,
     });
-    const summary = JSON.stringify({ providerEvidenceRecord, replayDigest, result });
+    const summary = JSON.stringify({
+      checkLifecycleKey: createCheckLifecycleKey({ headOid, pullNumber: pull.number }),
+      providerEvidenceRecord,
+      providerRunAttempt: run.run_attempt,
+      providerRunId: `${run.id}`,
+      replayDigest,
+      result,
+    });
     await assertWorkflowRunCurrent(run, headOid, pull.number);
     assertTrustedCandidateSelectionCurrent(trustedCandidateRecord, selectTrustedCandidate);
     await publishCheckForStablePull(
@@ -503,7 +510,19 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
   }
 }
 
-/** 为同一 PR/head/child run 等待态生成稳定幂等键，避免 guardian 每轮追加新 check。 */
+/**
+ * 物理 check 生命周期只绑定 repository/PR/head/name；它独立于 evidence/result CAS 与 run attempt，
+ * 因而能从 App 历史跨 cycle、进程重启和 lease successor handoff 恢复。
+ */
+export function createCheckLifecycleKey({
+  headOid,
+  pullNumber,
+  repositoryId = targetRepositoryId,
+}) {
+  return `check-lifecycle-v1:${repositoryId}:${pullNumber}:${headOid}:architecture-required`;
+}
+
+/** 为同一 PR/head/child run 等待态生成稳定结果键，同时显式携带独立 lifecycle identity。 */
 export function createPendingCheckRecord({
   headOid,
   pullNumber,
@@ -512,6 +531,7 @@ export function createPendingCheckRecord({
 }) {
   const runId = Number.isSafeInteger(run?.id) ? `${run.id}` : "missing";
   const runAttempt = Number.isSafeInteger(run?.run_attempt) ? `${run.run_attempt}` : "none";
+  const checkLifecycleKey = createCheckLifecycleKey({ headOid, pullNumber, repositoryId });
   const casKey = `${repositoryId}:${headOid}:pending:${pullNumber}:${runId}:${runAttempt}`;
   const replayDigest = sha256CanonicalJson({
     headOid,
@@ -523,11 +543,17 @@ export function createPendingCheckRecord({
   });
   return {
     casKey,
+    checkLifecycleKey,
     replayDigest,
     summary: JSON.stringify({
       casKey,
+      checkLifecycleKey,
+      headOid,
+      pullNumber,
       reason: "等待可信 child evidence workflow 完成。",
       replayDigest,
+      runAttempt,
+      runId,
       status: "pending",
     }),
   };
@@ -557,6 +583,7 @@ export function createTerminalFailureCheckRecord({
   const runId = Number.isSafeInteger(run?.id) ? `${run.id}` : "missing";
   const runAttempt = Number.isSafeInteger(run?.run_attempt) ? `${run.run_attempt}` : "none";
   const runConclusion = typeof run?.conclusion === "string" ? run.conclusion : "unknown";
+  const checkLifecycleKey = createCheckLifecycleKey({ headOid, pullNumber, repositoryId });
   const casKey = Number.isSafeInteger(run?.id) && Number.isSafeInteger(run?.run_attempt)
     ? createPendingCheckRecord({ headOid, pullNumber, repositoryId, run }).casKey
     : `${repositoryId}:${headOid}:terminal:${pullNumber}:${category}`;
@@ -574,9 +601,13 @@ export function createTerminalFailureCheckRecord({
   });
   return {
     casKey,
+    checkLifecycleKey,
     replayDigest,
     summary: JSON.stringify({
       casKey,
+      checkLifecycleKey,
+      headOid,
+      pullNumber,
       reason: stableReason,
       replayDigest,
       runAttempt,
@@ -585,6 +616,17 @@ export function createTerminalFailureCheckRecord({
       status: "terminal-failure",
     }),
   };
+}
+
+/** provider timeout/cancelled 保留原生非成功 conclusion，其余失败统一 fail closed。 */
+export function mapProviderRunConclusion(conclusion) {
+  if (conclusion === "cancelled") {
+    return "cancelled";
+  }
+  if (conclusion === "timed_out") {
+    return "timed_out";
+  }
+  return "failure";
 }
 
 /** 标记 provider 在验证期间产生了更新的 workflow run/attempt，需要从新快照重试。 */
@@ -708,6 +750,7 @@ async function revokePublishedSuccess(pull, error) {
       });
   await publishCheck(
     pull.head.sha,
+    pull.number,
     retryable ? "in_progress" : "completed",
     retryable ? null : "failure",
     terminal?.summary ?? (error instanceof Error ? error.message : "Controller success 复验失败。"),
@@ -791,6 +834,7 @@ async function publishCheckForStablePull(
   await assertPullOwnsUniqueOpenHeadCurrent(currentPull);
   return publishCheck(
     currentPull.head.sha,
+    currentPull.number,
     status,
     conclusion,
     summary,
@@ -889,6 +933,33 @@ async function assertFreshDriftMonitor() {
   }
 }
 
+/** 精确 terminal replay 只读确认现有 monitor lease，禁止重复 workflow_dispatch。 */
+async function assertFreshDriftMonitorReadOnly() {
+  try {
+    await assertControllerDefaultBranchCurrent();
+    const runs = await controllerGithubJson(
+      `repos/${controllerRepository}/actions/workflows/drift-monitor.yml/runs` +
+        `?branch=${encodeURIComponent(controllerDefaultBranch)}&per_page=100`,
+      { token: controllerRepositoryToken },
+    );
+    const evaluation = evaluateDriftMonitorLease(runs.workflow_runs, {
+      defaultBranch: controllerDefaultBranch,
+      repository: controllerRepository,
+      trustedHeadSha: controllerTrustedSha,
+      workflowPath: driftMonitorWorkflowPath,
+    });
+    if (evaluation.freshRun === null) {
+      throw new Error("独立 drift monitor 缺失、失败、来自未来或已过期，Controller fail closed。\n");
+    }
+    return evaluation.freshRun;
+  } catch (error) {
+    if (error instanceof DriftMonitorInvalidError) {
+      throw error;
+    }
+    throw new DriftMonitorInvalidError(error);
+  }
+}
+
 /** 使用 Controller 仓库自身 token 无输入触发固定 main monitor workflow。 */
 async function dispatchDriftMonitor() {
   return controllerGithubJson(
@@ -940,6 +1011,7 @@ async function publishDriftFailureForOpenPulls(pulls, trustedRecord, error) {
     });
     await publishCheck(
       headOid,
+      pull.number,
       "completed",
       "failure",
       JSON.stringify({
@@ -961,6 +1033,7 @@ async function publishDriftFailureForOpenPulls(pulls, trustedRecord, error) {
 /** 使用 Controller GitHub App installation token 发布唯一 architecture-required check。 */
 async function publishCheck(
   headOid,
+  pullNumber,
   status,
   conclusion,
   summary,
@@ -971,9 +1044,13 @@ async function publishCheck(
   return publishControllerCheck({
     allowFailureOnHistoryError,
     assertFreshMonitor: assertFreshDriftMonitor,
+    assertFreshMonitorReadOnly: assertFreshDriftMonitorReadOnly,
     casKey,
+    checkLifecycleKey: createCheckLifecycleKey({ headOid, pullNumber }),
     conclusion,
     headOid,
+    loadCheck: async (checkId) =>
+      controllerGithubJson(`repos/${targetRepository}/check-runs/${checkId}`),
     loadChecks: async () => {
       // 同一 head/name 的最近一页足以覆盖稳定 CAS；禁止每分钟完整分页历史。
       const response = await controllerGithubJson(
@@ -992,6 +1069,7 @@ async function publishCheck(
         method: "POST",
       }),
     replayDigest,
+    pullNumber,
     status,
     summary,
     updateCheck: async (checkId, body) =>
