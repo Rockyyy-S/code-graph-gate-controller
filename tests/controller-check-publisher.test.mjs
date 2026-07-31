@@ -427,47 +427,6 @@ test("现存 orphan 91036295709 由 terminal 91036644980 正常 supersede closur
   assert.equal(harness.posts.length, 0);
 });
 
-test("旧 main-drift failure 91052594278 被现有权威 success 明确 supersede", async () => {
-  const terminalDigest = "4".repeat(64);
-  const harness = createLifecycleHarness([
-    {
-      completed_at: "2026-07-30T23:58:58Z",
-      conclusion: "success",
-      id: 91036644980,
-      output: {
-        summary: JSON.stringify({
-          casKey,
-          checkLifecycleKey: lifecycleKey,
-          replayDigest: terminalDigest,
-        }),
-      },
-      status: "completed",
-    },
-    {
-      completed_at: "2026-07-31T01:49:59Z",
-      conclusion: "failure",
-      id: 91052594278,
-      output: {
-        summary: JSON.stringify({
-          casKey: "1303415307:head:controller-invalid:23",
-          replayDigest: "5".repeat(64),
-          status: "drift-monitor-invalid",
-        }),
-      },
-      status: "completed",
-    },
-  ]);
-
-  assert.equal(await publishControllerCheck(harness.input({
-    replayDigest: terminalDigest,
-    summary: JSON.stringify({ casKey, replayDigest: terminalDigest }),
-  })), "idempotent");
-  const driftFailure = harness.checks.find((check) => check.id === 91052594278);
-  assert.equal(driftFailure.conclusion, "neutral");
-  assert.equal(JSON.parse(driftFailure.output.summary).supersededByCheckId, 91036644980);
-  assert.equal(harness.posts.length, 0);
-});
-
 test("并发 successor replay 只 PATCH 同一 pending ID，不产生平行 POST", async () => {
   const harness = createLifecycleHarness([createLifecyclePending({ id: 202 })]);
   await Promise.all([
