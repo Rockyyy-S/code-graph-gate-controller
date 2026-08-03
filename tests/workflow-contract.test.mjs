@@ -204,6 +204,57 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /env -i HOME=/u);
 });
 
+test("portable producer 只开放显式输出并提供隔离的 Rust 1.88 离线执行面", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const rustBootstrap = /- name: Bootstrap fixed Rust toolchain and locked dependency cache[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+  const outputGrant = /- name: Grant candidate writes only to generated output directories[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+  const portableEvidence = /- name: Produce child gate evidence[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+
+  assert.equal(typeof rustBootstrap, "string");
+  assert.equal(typeof outputGrant, "string");
+  assert.equal(typeof portableEvidence, "string");
+  assert.match(rustBootstrap, /set -euo pipefail/u);
+  assert.match(rustBootstrap, /RUST_TOOLCHAIN: 1\.88\.0/u);
+  assert.match(
+    rustBootstrap,
+    /rustup_source="\$\(realpath -- "\$\(command -v rustup\)"\)"/u,
+  );
+  assert.match(rustBootstrap, /HOME="\$bootstrap_home"/u);
+  assert.match(rustBootstrap, /CARGO_HOME="\$bootstrap_cargo_home"/u);
+  assert.match(rustBootstrap, /RUSTUP_HOME="\$bootstrap_rustup_home"/u);
+  assert.match(
+    rustBootstrap,
+    /toolchain install "\$RUST_TOOLCHAIN" --profile minimal --no-self-update/u,
+  );
+  assert.match(
+    rustBootstrap,
+    /cargo" fetch --locked --manifest-path "\$candidate_root\/Cargo\.toml"/u,
+  );
+  assert.match(rustBootstrap, /cargo" metadata --locked --offline --format-version 1/u);
+  assert.match(rustBootstrap, /export CARGO_HOME="\\\$cargo_home"/u);
+  assert.match(rustBootstrap, /export CARGO_TARGET_DIR="\\\$HOME\/\.cargo-target"/u);
+  assert.match(
+    rustBootstrap,
+    /ln -s \/opt\/trusted-rust\/cargo-cache\/registry "\\\$cargo_home\/registry"/u,
+  );
+  assert.match(rustBootstrap, /chown -R 0:0 \/opt\/trusted-rust/u);
+  assert.match(rustBootstrap, /find \/opt\/trusted-rust -perm \/022 -print -quit/u);
+  assert.doesNotMatch(rustBootstrap, /sh\.rustup\.rs|curl[^\n]*rustup|wget[^\n]*rustup/u);
+
+  assert.match(outputGrant, /packages\/adapters\/host-path-posix-native\/dist/u);
+  assert.match(outputGrant, /sudo -u gatecandidate test -w "\$output_path"/u);
+  assert.match(outputGrant, /readonly_paths=\(/u);
+  assert.match(outputGrant, /packages\/adapters\/host-path-posix-native\/src\/index\.ts/u);
+  assert.match(outputGrant, /if sudo -u gatecandidate test -w "\$readonly_path"/u);
+  assert.doesNotMatch(outputGrant, /chown -R 20001:20001 "\$candidate_root"/u);
+
+  assert.match(portableEvidence, /TRUSTED_RUST_BIN: \/opt\/trusted-rust\/bin/u);
+  assert.match(
+    portableEvidence,
+    /PATH="\$TRUSTED_RUST_BIN:\$TRUSTED_PNPM_BIN:\$PATH"/u,
+  );
+});
+
 test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 job 合并", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
@@ -268,6 +319,24 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /PATH=\$sentinelRoot;\$env:PATH/u);
   assert.match(win32Job, /恶意 PATH pnpm sentinel 被调用/u);
   assert.ok(
+    win32Job.indexOf("Install frozen dependencies without candidate lifecycle") <
+      win32Job.indexOf("Build trusted POSIX adapter output for Win32 gate"),
+  );
+  assert.ok(
+    win32Job.indexOf("Build trusted POSIX adapter output for Win32 gate") <
+      win32Job.indexOf("Produce Win32 host identity evidence"),
+  );
+  assert.match(
+    win32Job,
+    /& \$trustedPnpm --dir \$candidateRoot exec tsc[\s\S]*packages\/adapters\/host-path-posix-native\/tsconfig\.build\.json/u,
+  );
+  assert.match(win32Job, /foreach \(\$lifecycle in @\('preinstall', 'install', 'postinstall'\)\)/u);
+  assert.match(win32Job, /npm_config_enable_pre_post_scripts = 'false'/u);
+  assert.match(win32Job, /npm_config_ignore_pnpmfile = 'true'/u);
+  assert.match(win32Job, /'index\.js', 'index\.d\.ts', 'linux-helper\.js', 'linux-helper\.d\.ts'/u);
+  assert.match(win32Job, /可信 POSIX adapter 构建造成 tracked 漂移/u);
+  assert.doesNotMatch(win32Job, /--filter @codegraph\/adapter-host-path-posix-native[^\n]*run build/u);
+  assert.ok(
     win32Job.indexOf("Revalidate trusted pnpm launcher for evidence") <
       win32Job.indexOf("Produce Win32 host identity evidence"),
   );
@@ -279,6 +348,10 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
     /install --frozen-lockfile --ignore-pnpmfile --ignore-scripts/u,
   );
   assert.match(win32Job, /Win32 host identity blocking gate 失败/u);
+  assert.match(win32Job, /Reject empty Win32 host identity test collection/u);
+  assert.match(win32Job, /if: \$\{\{ always\(\) \}\}/u);
+  assert.match(win32Job, /\(\\s\*0 tests\?\\s\*\\\)|\\bno tests\\b/u);
+  assert.match(win32Job, /\\bTests\\s\+\[1-9\]\[0-9\]\*\\s\+passed\\b/u);
   assert.match(win32Job, /gate-evidence-win32-raw-/u);
   assert.doesNotMatch(workflow, /continue-on-error:\s*true/u);
 
