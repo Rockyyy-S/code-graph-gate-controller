@@ -234,6 +234,90 @@ jobs:
           [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
           sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
 
+      - name: Bootstrap fixed Rust toolchain and locked dependency cache
+        env:
+          RUST_TOOLCHAIN: 1.88.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root=/tmp/gatecandidate-root/worktree
+          rustup_source="$(realpath -- "$(command -v rustup)")"
+          bootstrap_root="$(mktemp -d "$RUNNER_TEMP/trusted-rust-1.88.0.XXXXXX")"
+          bootstrap_home="$bootstrap_root/home"
+          bootstrap_cargo_home="$bootstrap_root/cargo-home"
+          bootstrap_rustup_home="$bootstrap_root/rustup-home"
+          cleanup_rust_bootstrap() {
+            rm -rf -- "$bootstrap_root"
+          }
+          trap cleanup_rust_bootstrap EXIT
+          [[ -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          install -d -m 0700 "$bootstrap_home" "$bootstrap_cargo_home" "$bootstrap_rustup_home"
+          env -i \
+            HOME="$bootstrap_home" \
+            CARGO_HOME="$bootstrap_cargo_home" \
+            LANG=C.UTF-8 \
+            PATH="$PATH" \
+            RUSTUP_HOME="$bootstrap_rustup_home" \
+            "$rustup_source" toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          toolchain_root="$(find "$bootstrap_rustup_home/toolchains" -mindepth 1 -maxdepth 1 -type d -name "$RUST_TOOLCHAIN-*" -print -quit)"
+          [[ -n "$toolchain_root" && -x "$toolchain_root/bin/cargo" && -x "$toolchain_root/bin/rustc" ]]
+          [[ "$(env -i HOME="$bootstrap_home" LANG=C.UTF-8 PATH="$toolchain_root/bin:/usr/bin:/bin" "$toolchain_root/bin/rustc" --version)" == rustc\ 1.88.0* ]]
+          env -i \
+            HOME="$bootstrap_home" \
+            CARGO_HOME="$bootstrap_cargo_home" \
+            LANG=C.UTF-8 \
+            PATH="$toolchain_root/bin:/usr/bin:/bin" \
+            RUSTUP_HOME="$bootstrap_rustup_home" \
+            "$toolchain_root/bin/cargo" fetch --locked --manifest-path "$candidate_root/Cargo.toml"
+          env -i \
+            HOME="$bootstrap_home" \
+            CARGO_HOME="$bootstrap_cargo_home" \
+            LANG=C.UTF-8 \
+            PATH="$toolchain_root/bin:/usr/bin:/bin" \
+            RUSTUP_HOME="$bootstrap_rustup_home" \
+            "$toolchain_root/bin/cargo" metadata --locked --offline --format-version 1 \
+              --manifest-path "$candidate_root/Cargo.toml" > "$bootstrap_root/metadata.json"
+          [[ -s "$bootstrap_root/metadata.json" && -d "$bootstrap_cargo_home/registry" ]]
+          [[ ! -e /opt/trusted-rust ]]
+          sudo install -d -o 0 -g 0 -m 0755 \
+            /opt/trusted-rust/bin /opt/trusted-rust/libexec /opt/trusted-rust/cargo-cache
+          sudo cp -a -- "$bootstrap_rustup_home" /opt/trusted-rust/rustup-home
+          sudo cp -a -- "$bootstrap_cargo_home/registry" /opt/trusted-rust/cargo-cache/registry
+          sudo install -o 0 -g 0 -m 0755 "$rustup_source" /opt/trusted-rust/libexec/rustup
+          toolchain_name="$(basename "$toolchain_root")"
+          sudo tee /opt/trusted-rust/bin/cargo > /dev/null <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "\${HOME:?gate HOME is required}"
+          cargo_home="\$HOME/.cargo"
+          mkdir -p "\$cargo_home"
+          if [[ ! -e "\$cargo_home/registry" ]]; then
+            ln -s /opt/trusted-rust/cargo-cache/registry "\$cargo_home/registry"
+          fi
+          export CARGO_HOME="\$cargo_home"
+          export CARGO_TARGET_DIR="\$HOME/.cargo-target"
+          export RUSTUP_HOME=/opt/trusted-rust/rustup-home
+          export RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN
+          export PATH="/opt/trusted-rust/rustup-home/toolchains/$toolchain_name/bin:\$PATH"
+          exec /opt/trusted-rust/rustup-home/toolchains/$toolchain_name/bin/cargo "\$@"
+          EOF
+          sudo tee /opt/trusted-rust/bin/rustup > /dev/null <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "\${HOME:?gate HOME is required}"
+          export CARGO_HOME="\$HOME/.cargo"
+          export RUSTUP_HOME=/opt/trusted-rust/rustup-home
+          export RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN
+          exec /opt/trusted-rust/libexec/rustup "\$@"
+          EOF
+          sudo chmod 0755 /opt/trusted-rust/bin/cargo /opt/trusted-rust/bin/rustup
+          sudo chown -R 0:0 /opt/trusted-rust
+          sudo chmod -R u+rwX,go+rX,go-w /opt/trusted-rust
+          [[ -z "$(find /opt/trusted-rust -perm /022 -print -quit)" ]]
+          sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
+          cleanup_rust_bootstrap
+          trap - EXIT
+
       - name: Grant candidate writes only to generated output directories
         shell: bash
         run: |
@@ -247,6 +331,7 @@ jobs:
             apps/webview/dist
             packages/adapters/analyzer-typescript/dist
             packages/adapters/git-local/dist
+            packages/adapters/host-path-posix-native/dist
             packages/adapters/store-sqlite/dist
             packages/application/dist
             packages/contracts/dist
@@ -264,6 +349,20 @@ jobs:
             sudo install -d -o 20001 -g 20001 -m 0700 "$output_path"
             sudo chown -R 20001:20001 "$output_path"
             sudo chmod -R u+rwX,go-rwx "$output_path"
+            sudo -u gatecandidate test -w "$output_path"
+          done
+          readonly_paths=(
+            Cargo.toml
+            apps/graph-service/src/index.ts
+            packages/adapters/host-path-posix-native/src/index.ts
+          )
+          for relative_path in "${readonly_paths[@]}"; do
+            readonly_path="$candidate_root/$relative_path"
+            [[ -f "$readonly_path" && ! -L "$readonly_path" ]]
+            if sudo -u gatecandidate test -w "$readonly_path"; then
+              echo "未授权候选源码可写：$relative_path" >&2
+              exit 1
+            fi
           done
 
       - name: Produce child gate evidence
@@ -275,9 +374,10 @@ jobs:
           PRODUCER_WORKFLOW_SHA: ${{ inputs.producer_workflow_sha }}
           PROVIDER_REPOSITORY_ID: ${{ inputs.provider_repository_id }}
           TRUSTED_PNPM_BIN: /opt/trusted-pnpm/bin
+          TRUSTED_RUST_BIN: /opt/trusted-rust/bin
         shell: bash
         run: |
-          sudo env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
+          sudo env -i HOME="$PWD/trusted-harness-home" LANG=C.UTF-8 PATH="$TRUSTED_RUST_BIN:$TRUSTED_PNPM_BIN:$PATH" node trusted-harness/bin/produce-gate-evidence.mjs \
             --artifact-directory artifacts \
             --base-oid "$BASE_OID" \
             --candidate-root /tmp/gatecandidate-root/worktree \
@@ -556,6 +656,46 @@ jobs:
           "HOST_PATH_INVOCATION_ATTESTATION=$(Join-Path $artifactDirectory 'host-path-invocation.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PATH_RUNTIME_ATTESTATION=$(Join-Path $artifactDirectory 'win32-path-runtime.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Build trusted POSIX adapter output for Win32 gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $trustedPnpm = $env:TRUSTED_PNPM_EXE
+          $candidateRoot = $env:CANDIDATE_ROOT
+          if (-not [IO.Path]::IsPathFullyQualified($trustedPnpm)) { throw '可信 pnpm 路径不是绝对路径。' }
+          if (-not [IO.Path]::IsPathFullyQualified($candidateRoot)) { throw '候选根路径不是绝对路径。' }
+          $packagePath = Join-Path $candidateRoot 'packages/adapters/host-path-posix-native/package.json'
+          $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+          if ($package.name -ne '@codegraph/adapter-host-path-posix-native') {
+            throw 'POSIX adapter package identity 漂移。'
+          }
+          foreach ($lifecycle in @('preinstall', 'install', 'postinstall')) {
+            if ($null -ne $package.scripts.$lifecycle) { throw "候选安装 lifecycle 未保持禁用：$lifecycle" }
+          }
+          $previousEnablePrePost = $env:npm_config_enable_pre_post_scripts
+          $previousIgnorePnpmfile = $env:npm_config_ignore_pnpmfile
+          try {
+            $env:npm_config_enable_pre_post_scripts = 'false'
+            $env:npm_config_ignore_pnpmfile = 'true'
+            & $trustedPnpm --dir $candidateRoot exec tsc `
+              -p packages/adapters/host-path-posix-native/tsconfig.build.json --pretty false
+            if ($LASTEXITCODE -ne 0) { throw '可信 POSIX adapter TypeScript 构建失败。' }
+          } finally {
+            $env:npm_config_enable_pre_post_scripts = $previousEnablePrePost
+            $env:npm_config_ignore_pnpmfile = $previousIgnorePnpmfile
+          }
+          $distRoot = Join-Path $candidateRoot 'packages/adapters/host-path-posix-native/dist'
+          foreach ($relativeOutput in @('index.js', 'index.d.ts', 'linux-helper.js', 'linux-helper.d.ts')) {
+            $outputPath = Join-Path $distRoot $relativeOutput
+            $item = Get-Item -LiteralPath $outputPath -Force
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw "POSIX adapter 输出不是普通文件：$relativeOutput"
+            }
+          }
+          & git -C $candidateRoot diff --quiet --no-ext-diff HEAD --
+          if ($LASTEXITCODE -ne 0) { throw '可信 POSIX adapter 构建造成 tracked 漂移。' }
+          if (Test-Path -LiteralPath $env:PATH_SENTINEL_MARKER) { throw '恶意 PATH pnpm sentinel 被调用。' }
+
       - name: Revalidate trusted pnpm launcher for evidence
         env:
           PNPM_ENTRY_SHA256: 0a8b6b9d6f391bb83e868a3f951eec74fb8f745c176fce523a9359f40b20fb7b
@@ -650,6 +790,30 @@ jobs:
             if (Test-Path -LiteralPath $env:PATH_SENTINEL_MARKER) { throw '恶意 PATH pnpm sentinel 被调用。' }
           } finally {
             $env:HOME = $previousHome
+          }
+
+      - name: Reject empty Win32 host identity test collection
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidencePath = Join-Path $env:ARTIFACT_DIRECTORY 'gate-evidence.json'
+          $stdoutPath = Join-Path $env:ARTIFACT_DIRECTORY 'host-path-identity-win32-v1.stdout.log'
+          if (-not (Test-Path -LiteralPath $evidencePath) -or -not (Test-Path -LiteralPath $stdoutPath)) {
+            throw 'Win32 host identity evidence 或测试日志缺失。'
+          }
+          $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          $gate = @($evidence.evidence | Where-Object { $_.gateId -eq 'host-path-identity-win32-v1' })
+          if ($gate.Count -ne 1 -or $gate[0].status -ne 'pass') {
+            throw 'Win32 host identity gate 未成功。'
+          }
+          $stdout = Get-Content -LiteralPath $stdoutPath -Raw
+          $plain = [regex]::Replace($stdout, "`e\[[0-9;]*m", '')
+          if ($plain -match '(?im)\(\s*0 tests?\s*\)|\bno tests\b') {
+            throw 'Win32 host identity gate 不接受 0 tests。'
+          }
+          if ($plain -notmatch '(?im)\bTests\s+[1-9][0-9]*\s+passed\b') {
+            throw 'Win32 host identity gate 未证明执行了非零测试。'
           }
 
       - name: Upload unsigned Win32 evidence
