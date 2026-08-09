@@ -24,14 +24,13 @@ import {
 } from "../lib/github-pagination.mjs";
 import {
   loadApprovedProposals,
-  selectTrustedRecordForCandidate,
+  selectCandidateAuthorization,
   validateTrustedRegistryApproval,
 } from "../lib/registry.mjs";
 
 const targetRepository = process.env.TARGET_REPOSITORY ?? "Rockyyy-S/code-graph";
 const targetRepositoryId = process.env.TARGET_REPOSITORY_ID ?? "1303415307";
 const controllerRepository = "Rockyyy-S/code-graph-gate-controller";
-const producerWorkflowSha = "b5bb1069f93fb92640d23df2b803401d4537f59d";
 const controllerAppId = process.env.CONTROLLER_APP_ID;
 const controllerRepositoryToken = process.env.CONTROLLER_REPOSITORY_TOKEN;
 const controllerTrustedSha = process.env.CONTROLLER_TRUSTED_SHA;
@@ -146,9 +145,12 @@ async function loadTrustedState() {
   });
   const proposals = await loadApprovedProposals("trusted/proposed", {
     currentRecord: trustedRecord,
-    expectedProducerWorkflowSha: producerWorkflowSha,
   });
-  return { currentRecord: trustedRecord, proposals };
+  return {
+    canonicalProducerWorkflowSha: trustedApproval.producerWorkflowSha,
+    currentRecord: trustedRecord,
+    proposals,
+  };
 }
 
 /** 完整读取当前全部开放 PR；分页不完整时拒绝继续发布正常结论。 */
@@ -235,11 +237,11 @@ class PullSnapshotChangedError extends Error {
 }
 
 /** 对单个 PR 最多重试三次 provider 快照变化，禁止向旧 head 发布结论。 */
-async function processPullRequest(initialPull, trustedRecord) {
+async function processPullRequest(initialPull, trustedState) {
   let pull = await loadCurrentOpenPull(initialPull.number);
   for (let attempt = 0; attempt < 3 && pull !== null; attempt += 1) {
     try {
-      await processPullRequestSnapshot(pull, trustedRecord);
+      await processPullRequestSnapshot(pull, trustedState);
       return;
     } catch (error) {
       if (error instanceof PublishedSuccessRevocationError) {
@@ -287,7 +289,7 @@ async function processPullRequest(initialPull, trustedRecord) {
 }
 
 /** 对固定 PR 快照只消费 provider API 返回的 run/artifact。 */
-async function processPullRequestSnapshot(pull, trustedRecord) {
+async function processPullRequestSnapshot(pull, trustedState) {
   const headOid = pull.head.sha;
   const runs = await collectGithubPages({
     endpoint:
@@ -331,17 +333,17 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
   }
   const registry = await readCandidateRegistry(headOid);
   const registryDigest = sha256CanonicalJson(registry);
-  const selectTrustedCandidate = () => selectTrustedRecordForCandidate({
-    currentRecord: trustedRecord.currentRecord,
+  const selectCandidateAuthorizationForCurrent = () => selectCandidateAuthorization({
+    canonicalProducerWorkflowSha: trustedState.canonicalProducerWorkflowSha,
+    currentRecord: trustedState.currentRecord,
     headOid,
     now: Date.now(),
-    proposals: trustedRecord.proposals,
+    proposals: trustedState.proposals,
     providerRepositoryId: `${pull.base.repo.id}`,
     pullNumber: pull.number,
     registryDigest,
-    workflowSha: producerWorkflowSha,
   });
-  const trustedCandidateRecord = selectTrustedCandidate();
+  const candidateAuthorization = selectCandidateAuthorizationForCurrent();
   const artifacts = await collectGithubPages({
     endpoint: `repos/${targetRepository}/actions/runs/${run.id}/artifacts`,
     field: "artifacts",
@@ -416,7 +418,7 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       "--signer-workflow",
       `github.com/${controllerRepository}/.github/workflows/produce-gate-evidence.yml`,
       "--signer-digest",
-      producerWorkflowSha,
+      candidateAuthorization.producerWorkflowSha,
       "--deny-self-hosted-runners",
       "--format",
       "json",
@@ -431,7 +433,7 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       evidenceBytes,
       expected: {
         mergeCommitOid: currentPull.merge_commit_sha,
-        producerWorkflowSha,
+        producerWorkflowSha: candidateAuthorization.producerWorkflowSha,
         providerRepository: targetRepository,
         providerRepositoryId: targetRepositoryId,
         pullNumber: pull.number,
@@ -441,7 +443,7 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       verifiedAttestations,
     });
     const artifact = JSON.parse(evidenceBytes.toString("utf8"));
-    const result = evaluateControllerCandidate({
+    const evaluatedCandidate = evaluateControllerCandidate({
       artifact,
       currentProviderContext: {
         baseOid: currentPull.base.sha,
@@ -449,14 +451,19 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
         providerRepositoryId: `${currentPull.base.repo.id}`,
       },
       registry,
-      trustedRecord: trustedCandidateRecord,
+      trustedRecord: candidateAuthorization.record,
     });
+    const result = {
+      ...evaluatedCandidate,
+      producerWorkflowSha: candidateAuthorization.producerWorkflowSha,
+    };
     const providerEvidenceRecord = {
       ...attestationRecord,
       ...providerJobRecord,
       gateEvidenceDigests: result.gateEvidenceDigests ?? [],
       headOid,
       jobName: "gate-evidence / gate-evidence",
+      producerWorkflowSha: candidateAuthorization.producerWorkflowSha,
       schemaVersion: 1,
       workflowRef:
         `${targetRepository}/.github/workflows/architecture-required.yml@refs/pull/${pull.number}/merge`,
@@ -465,6 +472,7 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       artifactDigest: attestationRecord.artifactDigest,
       gateImplementationDigest: result.gateImplementationDigest,
       gateEvidenceDigests: result.gateEvidenceDigests ?? [],
+      producerWorkflowSha: candidateAuthorization.producerWorkflowSha,
       trustedSequence: result.trustedSequence,
     });
     const summary = JSON.stringify({
@@ -476,7 +484,10 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
       result,
     });
     await assertWorkflowRunCurrent(run, headOid, pull.number);
-    assertTrustedCandidateSelectionCurrent(trustedCandidateRecord, selectTrustedCandidate);
+    assertTrustedCandidateSelectionCurrent(
+      candidateAuthorization,
+      selectCandidateAuthorizationForCurrent,
+    );
     await publishCheckForStablePull(
       currentPull,
       "completed",
@@ -491,8 +502,8 @@ async function processPullRequestSnapshot(pull, trustedRecord) {
           assertFresh: assertFreshDriftMonitor,
           assertProposal: () =>
             assertTrustedCandidateSelectionCurrent(
-              trustedCandidateRecord,
-              selectTrustedCandidate,
+              candidateAuthorization,
+              selectCandidateAuthorizationForCurrent,
             ),
           assertPull: assertPullSnapshotCurrent,
           assertRun: assertWorkflowRunCurrent,
@@ -708,20 +719,23 @@ class PublishedSuccessRevocationError extends AggregateError {
   }
 }
 
-/** proposed/current registry 必须在发布前后保持同一有效可信选择。 */
-function assertTrustedCandidateSelectionCurrent(expectedRecord, selectCurrent) {
-  let currentRecord;
+/** proposed/current registry 与 producer 必须在发布前后保持同一原子授权。 */
+function assertTrustedCandidateSelectionCurrent(expectedAuthorization, selectCurrent) {
+  let currentAuthorization;
   try {
-    currentRecord = selectCurrent();
+    currentAuthorization = selectCurrent();
   } catch (error) {
     throw new ProposalSelectionChangedError(error);
   }
-  if (sha256CanonicalJson(currentRecord) !== sha256CanonicalJson(expectedRecord)) {
+  if (
+    sha256CanonicalJson(currentAuthorization) !==
+    sha256CanonicalJson(expectedAuthorization)
+  ) {
     throw new ProposalSelectionChangedError(
-      new Error("候选 registry 的可信选择在验证期间发生变化。"),
+      new Error("候选 registry/producer 授权在验证期间发生变化。"),
     );
   }
-  return currentRecord;
+  return currentAuthorization;
 }
 
 /** proposed registry 过期、尚未生效或选择漂移时撤销已发布 success。 */

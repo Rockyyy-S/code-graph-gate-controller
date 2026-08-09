@@ -8,6 +8,7 @@ import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
 import {
   loadApprovedProposals,
   parseEvidenceProducerId,
+  selectCandidateAuthorization,
   selectTrustedRecordForCandidate,
   UNBOUND_GATE_IMPLEMENTATION_DIGEST_V1,
   validateProposedRegistryApproval,
@@ -42,23 +43,28 @@ function createRegistry(overrides = {}) {
 
 /** 创建与当前可信根闭合的 proposed record/approval 测试对。 */
 function createProposedPair({
+  approvedAt,
   currentRecord,
   effectiveAt,
   expiresAt,
+  gateImplementationDigest = "e".repeat(64),
+  gateRegistryDigest = "f".repeat(64),
   headOid,
+  producerWorkflowSha = workflowSha,
   pullNumber,
 }) {
+  const approvalTime = approvedAt ?? effectiveAt;
   const approval = {
     approvalKind: "proposed-gate-registry",
-    approvedAt: effectiveAt,
+    approvedAt: approvalTime,
     approvedBy: "owner",
     baseGateRegistryDigest: currentRecord.gateRegistryDigest,
     effectiveAt,
     expiresAt,
-    gateImplementationDigest: "e".repeat(64),
-    gateRegistryDigest: "f".repeat(64),
+    gateImplementationDigest,
+    gateRegistryDigest,
     headOid,
-    producerWorkflowSha: workflowSha,
+    producerWorkflowSha,
     providerRepositoryId: currentRecord.providerRepositoryId,
     pullNumber,
     schemaVersion: 1,
@@ -83,6 +89,56 @@ function createProposedPair({
     },
   };
 }
+
+test("candidate authorization 原子返回 canonical 或 exact proposal 的 record/producer", async () => {
+  const canonicalProducerWorkflowSha = "a".repeat(40);
+  const proposedProducerWorkflowSha = "b".repeat(40);
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const canonical = selectCandidateAuthorization({
+    canonicalProducerWorkflowSha,
+    currentRecord,
+    headOid: "5".repeat(40),
+    proposals: [],
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 9,
+    registryDigest: currentRecord.gateRegistryDigest,
+  });
+  assert.deepEqual(canonical, {
+    producerWorkflowSha: canonicalProducerWorkflowSha,
+    record: currentRecord,
+  });
+
+  const proposal = createProposedPair({
+    currentRecord,
+    effectiveAt: "2026-08-09T01:00:00Z",
+    expiresAt: "2026-08-10T01:00:00Z",
+    headOid: "6".repeat(40),
+    producerWorkflowSha: proposedProducerWorkflowSha,
+    pullNumber: 9,
+  });
+  const proposed = selectCandidateAuthorization({
+    canonicalProducerWorkflowSha,
+    currentRecord,
+    headOid: proposal.record.headOid,
+    now: Date.parse("2026-08-09T12:00:00Z"),
+    proposals: [proposal],
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 9,
+    registryDigest: proposal.record.gateRegistryDigest,
+  });
+  assert.equal(proposed.producerWorkflowSha, proposedProducerWorkflowSha);
+  assert.equal(proposed.record.sourceCommit, proposal.record.headOid);
+  assert.equal(proposed.record.sequence, 25);
+});
 
 test("registry 验证 definition digest 与 producer identity", () => {
   const registry = createRegistry();
@@ -220,8 +276,7 @@ test("sequence 24 信任根加载 PR 9 exact head 的 sequence 25 proposal", asy
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
       currentRecord,
-      expectedProducerWorkflowSha: "b5bb1069f93fb92640d23df2b803401d4537f59d",
-      now: Date.parse("2026-08-09T10:00:00+08:00"),
+      now: Date.parse("2026-08-09T13:00:00+08:00"),
     },
   );
 
@@ -229,24 +284,229 @@ test("sequence 24 信任根加载 PR 9 exact head 的 sequence 25 proposal", asy
   assert.equal(proposals.length, 1);
   const [{ approval, record }] = proposals;
   assert.deepEqual(record, {
-    approvalEvidenceDigest: "dd3ea96e9d7b5382771afac84487c6b024688fa60f01548499618db396cb5c7f",
+    approvalEvidenceDigest: "7c695e1e86306963fa30e022e61953e5fb746e210d47faf3ab0445704848fd08",
     baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-09T09:50:27+08:00",
-    expiresAt: "2026-08-16T09:50:27+08:00",
+    effectiveAt: "2026-08-09T12:10:33+08:00",
+    expiresAt: "2026-08-16T12:10:33+08:00",
     gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
-    gateRegistryDigest: "61490da6feecb905711b23157911a51280b3afd8f378bf795c9562b078549ddc",
-    headOid: "5335643ddc7804260aeeda16fd02fbc61719800d",
+    gateRegistryDigest: "5318861ba63c2e6f83e998ca1a3ff827d800ab512a3af44f7e38443b9a32eb5c",
+    headOid: "833c11094b9189f2aaefbe85bbc811c504dda0e1",
     providerRepositoryId: "1303415307",
     pullNumber: 9,
     schemaVersion: 1,
     sequence: 25,
-    sourceCommit: "5335643ddc7804260aeeda16fd02fbc61719800d",
+    sourceCommit: "833c11094b9189f2aaefbe85bbc811c504dda0e1",
   });
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.approvedBy, "Rockyyy-S");
   assert.equal(
     approval.producerWorkflowSha,
-    "b5bb1069f93fb92640d23df2b803401d4537f59d",
+    "23b8fc5bc221b99d78640ab55a711ae3d42054f4",
+  );
+  const selected = selectCandidateAuthorization({
+    canonicalProducerWorkflowSha: "b5bb1069f93fb92640d23df2b803401d4537f59d",
+    currentRecord,
+    headOid: record.headOid,
+    now: Date.parse("2026-08-09T13:00:00+08:00"),
+    proposals,
+    providerRepositoryId: record.providerRepositoryId,
+    pullNumber: record.pullNumber,
+    registryDigest: record.gateRegistryDigest,
+  });
+  assert.equal(selected.producerWorkflowSha, approval.producerWorkflowSha);
+  assert.equal(selected.record.sourceCommit, record.headOid);
+});
+
+test("exact-head proposal 在 canonical fallback 前拒绝 duplicate、digest mix 与 producer mismatch", () => {
+  const canonicalProducerWorkflowSha = "a".repeat(40);
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const proposal = createProposedPair({
+    currentRecord,
+    effectiveAt: "2026-08-09T01:00:00Z",
+    expiresAt: "2026-08-10T01:00:00Z",
+    gateRegistryDigest: currentRecord.gateRegistryDigest,
+    headOid: "5".repeat(40),
+    producerWorkflowSha: "b".repeat(40),
+    pullNumber: 9,
+  });
+  const selection = {
+    canonicalProducerWorkflowSha,
+    currentRecord,
+    headOid: proposal.record.headOid,
+    now: Date.parse("2026-08-09T12:00:00Z"),
+    proposals: [proposal],
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 9,
+    registryDigest: currentRecord.gateRegistryDigest,
+  };
+
+  const conflict = createProposedPair({
+    currentRecord,
+    effectiveAt: proposal.record.effectiveAt,
+    expiresAt: proposal.record.expiresAt,
+    gateRegistryDigest: currentRecord.gateRegistryDigest,
+    headOid: proposal.record.headOid,
+    producerWorkflowSha: "c".repeat(40),
+    pullNumber: 9,
+  });
+  assert.throws(
+    () => selectCandidateAuthorization({ ...selection, proposals: [proposal, conflict] }),
+    /多个|冲突/u,
+  );
+  assert.throws(
+    () => selectCandidateAuthorization({ ...selection, registryDigest: "d".repeat(64) }),
+    /digest/u,
+  );
+  assert.throws(
+    () =>
+      selectCandidateAuthorization({
+        ...selection,
+        expectedProducerWorkflowSha: canonicalProducerWorkflowSha,
+      }),
+    /ProposedGateRegistryApprovalV1/u,
+  );
+});
+
+test("proposal replay、字段混配、approval digest 漂移与时间窗均 fail closed", () => {
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const pair = createProposedPair({
+    currentRecord,
+    effectiveAt: "2026-08-09T01:00:00Z",
+    expiresAt: "2026-08-10T01:00:00Z",
+    headOid: "5".repeat(40),
+    producerWorkflowSha: "b".repeat(40),
+    pullNumber: 9,
+  });
+  const validate = (candidate) =>
+    validateProposedRegistryApproval({
+      ...candidate,
+      currentRecord,
+      expectedProducerWorkflowSha: candidate.approval.producerWorkflowSha,
+      now: Date.parse("2026-08-09T12:00:00Z"),
+    });
+
+  const mutations = [
+    (candidate) => (candidate.record.providerRepositoryId = "1"),
+    (candidate) => (candidate.record.pullNumber = 10),
+    (candidate) => (candidate.record.sequence = 26),
+    (candidate) => (candidate.record.sourceCommit = "6".repeat(40)),
+    (candidate) => (candidate.record.headOid = "6".repeat(40)),
+    (candidate) => (candidate.record.baseGateRegistryDigest = "7".repeat(64)),
+    (candidate) => (candidate.record.gateRegistryDigest = "8".repeat(64)),
+    (candidate) => (candidate.record.gateImplementationDigest = "9".repeat(64)),
+    (candidate) => (candidate.record.approvalEvidenceDigest = "0".repeat(64)),
+    (candidate) => (candidate.approval.producerWorkflowSha = "c".repeat(40)),
+  ];
+  for (const mutate of mutations) {
+    const candidate = structuredClone(pair);
+    mutate(candidate);
+    assert.throws(() => validate(candidate), /ProposedGateRegistryApprovalV1/u);
+  }
+
+  const oldPair = createProposedPair({
+    currentRecord,
+    effectiveAt: pair.record.effectiveAt,
+    expiresAt: pair.record.expiresAt,
+    headOid: "6".repeat(40),
+    producerWorkflowSha: pair.approval.producerWorkflowSha,
+    pullNumber: 9,
+  });
+  const replay = {
+    approval: oldPair.approval,
+    record: {
+      ...pair.record,
+      approvalEvidenceDigest: sha256CanonicalJson(oldPair.approval),
+    },
+  };
+  assert.throws(() => validate(replay), /ProposedGateRegistryApprovalV1/u);
+
+  for (const [effectiveAt, expiresAt, now] of [
+    ["2026-08-09T13:00:00Z", "2026-08-10T01:00:00Z", "2026-08-09T12:00:00Z"],
+    ["2026-08-09T01:00:00Z", "2026-08-09T11:00:00Z", "2026-08-09T12:00:00Z"],
+    ["2026-08-09T01:00:00Z", "2026-08-09T01:00:00Z", "2026-08-09T01:00:00Z"],
+  ]) {
+    const windowPair = createProposedPair({
+      currentRecord,
+      effectiveAt,
+      expiresAt,
+      headOid: pair.record.headOid,
+      producerWorkflowSha: pair.approval.producerWorkflowSha,
+      pullNumber: 9,
+    });
+    assert.throws(
+      () =>
+        validateProposedRegistryApproval({
+          ...windowPair,
+          currentRecord,
+          expectedProducerWorkflowSha: windowPair.approval.producerWorkflowSha,
+          now: Date.parse(now),
+        }),
+      /ProposedGateRegistryApprovalV1/u,
+    );
+  }
+});
+
+test("proposal loader 对缺失 approval fail closed，Harness 继续强制 expected workflow", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "controller-missing-approval-"));
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const pair = createProposedPair({
+    currentRecord,
+    effectiveAt: "2026-08-09T01:00:00Z",
+    expiresAt: "2026-08-10T01:00:00Z",
+    headOid: "5".repeat(40),
+    producerWorkflowSha: "b".repeat(40),
+    pullNumber: 9,
+  });
+  try {
+    await writeFile(path.join(directory, "missing.json"), JSON.stringify(pair.record));
+    await assert.rejects(
+      loadApprovedProposals(directory, { currentRecord }),
+      /ENOENT|no such file/u,
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+
+  assert.throws(
+    () =>
+      selectTrustedRecordForCandidate({
+        currentRecord,
+        headOid: pair.record.headOid,
+        now: Date.parse("2026-08-09T12:00:00Z"),
+        proposals: [pair],
+        providerRepositoryId: currentRecord.providerRepositoryId,
+        pullNumber: 9,
+        registryDigest: pair.record.gateRegistryDigest,
+        workflowSha: "c".repeat(40),
+      }),
+    /ProposedGateRegistryApprovalV1/u,
   );
 });
 
@@ -607,6 +867,29 @@ test("proposal loader 校验全部记录完整性但仅返回当前有效时间�
       now: Date.parse("2026-07-24T12:00:00Z"),
     });
     assert.deepEqual(proposals.map(({ record }) => record.pullNumber), [1]);
+
+    const controllerProposals = await loadApprovedProposals(directory, {
+      currentRecord,
+      now: Date.parse("2026-07-24T12:00:00Z"),
+    });
+    assert.deepEqual(
+      controllerProposals.map(({ record }) => record.pullNumber),
+      [1, 2, 3],
+    );
+    assert.throws(
+      () =>
+        selectCandidateAuthorization({
+          canonicalProducerWorkflowSha: workflowSha,
+          currentRecord,
+          headOid: fixtures[2][1].record.headOid,
+          now: Date.parse("2026-07-24T12:00:00Z"),
+          proposals: controllerProposals,
+          providerRepositoryId: currentRecord.providerRepositoryId,
+          pullNumber: fixtures[2][1].record.pullNumber,
+          registryDigest: fixtures[2][1].record.gateRegistryDigest,
+        }),
+      /ProposedGateRegistryApprovalV1/u,
+    );
 
     const invalidExpired = fixtures[1][1];
     await writeFile(
