@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
+          ref: f03e200280d8da8bdd474abe01b9ef2e90f3a631
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -415,7 +415,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${PORTABLE_SNAPSHOT_RUNTIME_READY:-}" == "true" ]]
+          printf 'portable-runtime-proof: snapshot-ready=%s\n' "${PORTABLE_SNAPSHOT_RUNTIME_READY:-unset}"
+          if [[ "${PORTABLE_SNAPSHOT_RUNTIME_READY:-}" != "true" ]]; then
+            echo "portable-runtime-proof: snapshot-ready: fail" >&2
+            exit 1
+          fi
           candidate_root=/tmp/gatecandidate-root/worktree
           helper_manifest="$candidate_root/packages/adapters/host-path-posix-native/native/codegraph-host-path-helper/Cargo.toml"
           helper_build_home=/tmp/gatecandidate-helper-build
@@ -467,7 +471,12 @@ jobs:
             echo "Cargo helper 构建失败：exit=$cargo_status" >&2
             exit "$cargo_status"
           fi
-          [[ -s "$cargo_messages" ]]
+          printf 'cargo-topology: messages=%s bytes=%s\n' \
+            "$cargo_messages" "$(stat -c '%s' -- "$cargo_messages" 2>/dev/null || printf 'unavailable')"
+          if [[ ! -s "$cargo_messages" ]]; then
+            echo "cargo-topology: messages: fail" >&2
+            exit 1
+          fi
           CARGO_MESSAGES="$cargo_messages" \
           RESOLVED_EXECUTABLES="$resolved_executables" \
           node --input-type=module <<'CARGO_NODE'
@@ -522,13 +531,177 @@ jobs:
           daemon_source="$(RESOLVED_EXECUTABLES="$resolved_executables" node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(process.env.RESOLVED_EXECUTABLES, "utf8"))["codegraph-host-path-daemon"])')"
           expected_bridge_source="$helper_build_home/.cargo-target/release/codegraph-host-path-bridge"
           expected_daemon_source="$helper_build_home/.cargo-target/release/codegraph-host-path-daemon"
-          [[ "$bridge_source" == "$expected_bridge_source" ]]
-          [[ "$daemon_source" == "$expected_daemon_source" ]]
+          printf 'cargo-topology[bridge]: resolved=%s expected=%s\n' \
+            "$bridge_source" "$expected_bridge_source"
+          printf 'cargo-topology[daemon]: resolved=%s expected=%s\n' \
+            "$daemon_source" "$expected_daemon_source"
+          if [[ "$bridge_source" != "$expected_bridge_source" ]]; then
+            echo "cargo-topology[bridge]: fail" >&2
+            exit 1
+          fi
+          if [[ "$daemon_source" != "$expected_daemon_source" ]]; then
+            echo "cargo-topology[daemon]: fail" >&2
+            exit 1
+          fi
 
-          file_tool=/usr/bin/file
-          readelf_tool=/usr/bin/readelf
-          [[ -f "$file_tool" && ! -L "$file_tool" && -x "$file_tool" ]]
-          [[ -f "$readelf_tool" && ! -L "$readelf_tool" && -x "$readelf_tool" ]]
+          validate_trusted_system_tool_policy() {
+            local label="$1"
+            local alias_path="$2"
+            local alias_type="$3"
+            local alias_uid="$4"
+            local alias_gid="$5"
+            local alias_mode="$6"
+            local resolved_path="$7"
+            local target_type="$8"
+            local target_uid="${9}"
+            local target_gid="${10}"
+            local target_mode="${11}"
+            local target_executable="${12}"
+            local alias_stable="${13}"
+            local target_stable="${14}"
+            local target_mode_bits
+
+            printf 'trusted-tool[%s] proof: alias=%s resolved=%s alias-type=%s alias-owner=%s:%s alias-mode=%s target-type=%s target-owner=%s:%s target-mode=%s target-executable=%s alias-stable=%s target-stable=%s\n' \
+              "$label" "$alias_path" "$resolved_path" "$alias_type" "$alias_uid" "$alias_gid" \
+              "$alias_mode" "$target_type" "$target_uid" "$target_gid" "$target_mode" \
+              "$target_executable" "$alias_stable" "$target_stable"
+
+            case "$alias_path" in
+              /usr/bin/file|/usr/bin/readelf) ;;
+              *)
+                echo "trusted-tool[$label] alias-policy: fail" >&2
+                return 1
+                ;;
+            esac
+            case "$alias_type" in
+              "regular file"|"symbolic link") ;;
+              *)
+                echo "trusted-tool[$label] alias-type: fail" >&2
+                return 1
+                ;;
+            esac
+            if [[ "$alias_uid" != "0" ]]; then
+              echo "trusted-tool[$label] alias-owner: fail" >&2
+              return 1
+            fi
+            if [[ -z "$resolved_path" ]]; then
+              echo "trusted-tool[$label] resolved-target: fail" >&2
+              return 1
+            fi
+            case "$resolved_path" in
+              /usr/bin/?*|/bin/?*) ;;
+              *)
+                echo "trusted-tool[$label] resolved-policy: fail" >&2
+                return 1
+                ;;
+            esac
+            if [[ "$target_type" != "regular file" ]]; then
+              echo "trusted-tool[$label] target-regular: fail" >&2
+              return 1
+            fi
+            if [[ "$target_uid" != "0" ]]; then
+              echo "trusted-tool[$label] target-owner: fail" >&2
+              return 1
+            fi
+            if [[ ! "$target_mode" =~ ^[0-7]{3,4}$ ]]; then
+              echo "trusted-tool[$label] target-mode-format: fail" >&2
+              return 1
+            fi
+            target_mode_bits=$((8#$target_mode))
+            if (( (target_mode_bits & 0022) != 0 )); then
+              echo "trusted-tool[$label] target-mode: fail" >&2
+              return 1
+            fi
+            if [[ "$target_executable" != "yes" ]]; then
+              echo "trusted-tool[$label] target-executable: fail" >&2
+              return 1
+            fi
+            if [[ "$alias_stable" != "yes" ]]; then
+              echo "trusted-tool[$label] alias-stable: fail" >&2
+              return 1
+            fi
+            if [[ "$target_stable" != "yes" ]]; then
+              echo "trusted-tool[$label] target-stable: fail" >&2
+              return 1
+            fi
+          }
+
+          resolve_trusted_system_tool() {
+            local label="$1"
+            local alias_path="$2"
+            local alias_stat_before="unavailable|unavailable|unavailable|unavailable|unavailable"
+            local alias_stat_after="unavailable|unavailable|unavailable|unavailable|unavailable"
+            local alias_type="unavailable"
+            local alias_uid="unavailable"
+            local alias_gid="unavailable"
+            local alias_mode="unavailable"
+            local alias_identity_before="unavailable"
+            local resolved_path=""
+            local resolved_after=""
+            local target_stat_before="unavailable|unavailable|unavailable|unavailable|unavailable"
+            local target_stat_after="unavailable|unavailable|unavailable|unavailable|unavailable"
+            local target_type="unavailable"
+            local target_uid="unavailable"
+            local target_gid="unavailable"
+            local target_mode="unavailable"
+            local target_identity_before="unavailable"
+            local target_executable="no"
+            local alias_stable="no"
+            local target_stable="no"
+
+            alias_stat_before="$(stat -c '%F|%u|%g|%a|dev=%d inode=%i size=%s mtime=%Y ctime=%Z' -- "$alias_path" 2>/dev/null || printf 'unavailable|unavailable|unavailable|unavailable|unavailable')"
+            IFS='|' read -r alias_type alias_uid alias_gid alias_mode alias_identity_before <<< "$alias_stat_before"
+            resolved_path="$(readlink -e -- "$alias_path" 2>/dev/null || true)"
+            if [[ -n "$resolved_path" ]]; then
+              target_stat_before="$(stat -Lc '%F|%u|%g|%a|dev=%d inode=%i size=%s mtime=%Y ctime=%Z' -- "$resolved_path" 2>/dev/null || printf 'unavailable|unavailable|unavailable|unavailable|unavailable')"
+              IFS='|' read -r target_type target_uid target_gid target_mode target_identity_before <<< "$target_stat_before"
+              if [[ -x "$resolved_path" ]]; then
+                target_executable="yes"
+              fi
+            fi
+
+            # alias 可以是 distro symlink；安全边界落在固定 alias、canonical target 与两者稳定身份上。
+            alias_stat_after="$(stat -c '%F|%u|%g|%a|dev=%d inode=%i size=%s mtime=%Y ctime=%Z' -- "$alias_path" 2>/dev/null || printf 'unavailable|unavailable|unavailable|unavailable|unavailable')"
+            resolved_after="$(readlink -e -- "$alias_path" 2>/dev/null || true)"
+            if [[ -n "$resolved_after" ]]; then
+              target_stat_after="$(stat -Lc '%F|%u|%g|%a|dev=%d inode=%i size=%s mtime=%Y ctime=%Z' -- "$resolved_after" 2>/dev/null || printf 'unavailable|unavailable|unavailable|unavailable|unavailable')"
+            fi
+            if [[ "$alias_stat_before" == "$alias_stat_after" && "$resolved_path" == "$resolved_after" ]]; then
+              alias_stable="yes"
+            fi
+            if [[ -n "$resolved_path" && "$resolved_path" == "$resolved_after" && "$target_stat_before" == "$target_stat_after" ]]; then
+              target_stable="yes"
+            fi
+
+            validate_trusted_system_tool_policy \
+              "$label" "$alias_path" "$alias_type" "$alias_uid" "$alias_gid" "$alias_mode" \
+              "$resolved_path" "$target_type" "$target_uid" "$target_gid" "$target_mode" \
+              "$target_executable" "$alias_stable" "$target_stable"
+            trusted_tool_resolved="$resolved_path"
+            trusted_tool_identity="$target_stat_after"
+          }
+
+          assert_trusted_system_tool_identity() {
+            local label="$1"
+            local resolved_path="$2"
+            local expected_identity="$3"
+            local current_identity
+
+            current_identity="$(stat -Lc '%F|%u|%g|%a|dev=%d inode=%i size=%s mtime=%Y ctime=%Z' -- "$resolved_path" 2>/dev/null || printf 'unavailable')"
+            printf 'trusted-tool[%s] use-topology: resolved=%s expected-identity=%s current-identity=%s\n' \
+              "$label" "$resolved_path" "$expected_identity" "$current_identity"
+            if [[ "$current_identity" != "$expected_identity" ]]; then
+              echo "trusted-tool[$label] use-identity: fail" >&2
+              return 1
+            fi
+          }
+
+          resolve_trusted_system_tool file /usr/bin/file
+          file_tool="$trusted_tool_resolved"
+          file_tool_identity="$trusted_tool_identity"
+          resolve_trusted_system_tool readelf /usr/bin/readelf
+          readelf_tool="$trusted_tool_resolved"
+          readelf_tool_identity="$trusted_tool_identity"
           prove_private_binary() {
             local label="$1"
             local source="$2"
@@ -591,12 +764,14 @@ jobs:
             printf 'helper-proof[%s] sha256: %s\n' "$label" "$source_sha"
             [[ "$source_sha" =~ ^[a-f0-9]{64}$ ]]
 
+            assert_trusted_system_tool_identity file "$file_tool" "$file_tool_identity"
             file_description="$(sudo env LC_ALL=C "$file_tool" --brief -- "$source")"
             printf 'helper-proof[%s] file: %s\n' "$label" "$file_description"
             [[ "$file_description" == ELF\ 64-bit\ LSB* ]]
             [[ "$file_description" == *x86-64* ]]
             [[ "$file_description" == *executable* ]]
 
+            assert_trusted_system_tool_identity readelf "$readelf_tool" "$readelf_tool_identity"
             elf_header="$(sudo env LC_ALL=C "$readelf_tool" -h -- "$source")"
             elf_class="$(awk -F: '/^[[:space:]]*Class:/{sub(/^[[:space:]]*/, "", $2); print $2; exit}' <<< "$elf_header")"
             elf_machine="$(awk -F: '/^[[:space:]]*Machine:/{sub(/^[[:space:]]*/, "", $2); print $2; exit}' <<< "$elf_header")"
@@ -1051,7 +1226,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
+          ref: f03e200280d8da8bdd474abe01b9ef2e90f3a631
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Checkout trusted registry state
@@ -1542,7 +1717,7 @@ jobs:
           fetch-depth: 1
           path: trusted-harness
           persist-credentials: false
-          ref: 97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f
+          ref: f03e200280d8da8bdd474abe01b9ef2e90f3a631
           repository: Rockyyy-S/code-graph-gate-controller
 
       - name: Download portable unsigned evidence into a clean runner
