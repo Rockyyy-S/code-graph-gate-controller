@@ -426,6 +426,10 @@ jobs:
           }
           trap cleanup_helper_staging EXIT
           sudo install -d -o 20001 -g 20001 -m 0700 "$helper_build_home"
+          cargo_messages="$material_staging/cargo-messages.jsonl"
+          cargo_stderr="$material_staging/cargo.stderr.log"
+          resolved_executables="$material_staging/cargo-executables.json"
+          set +e
           sudo -u gatecandidate env -i --chdir="$candidate_root" \
             CARGO_NET_OFFLINE=true \
             CI=true \
@@ -436,13 +440,287 @@ jobs:
             /opt/trusted-rust/bin/cargo build --locked --offline --release \
               --manifest-path "$helper_manifest" \
               --bin codegraph-host-path-bridge \
-              --bin codegraph-host-path-daemon
-          bridge_source="$helper_build_home/.cargo-target/release/codegraph-host-path-bridge"
-          daemon_source="$helper_build_home/.cargo-target/release/codegraph-host-path-daemon"
-          [[ -f "$bridge_source" && ! -L "$bridge_source" && -x "$bridge_source" ]]
-          [[ -f "$daemon_source" && ! -L "$daemon_source" && -x "$daemon_source" ]]
-          BRIDGE_SOURCE="$bridge_source" \
-          DAEMON_SOURCE="$daemon_source" \
+              --bin codegraph-host-path-daemon \
+              --message-format=json-render-diagnostics \
+              > "$cargo_messages" 2> "$cargo_stderr"
+          cargo_status=$?
+          set -e
+          if [[ -s "$cargo_stderr" ]]; then
+            cat -- "$cargo_stderr" >&2
+          fi
+          if (( cargo_status != 0 )); then
+            CARGO_MESSAGES="$cargo_messages" node --input-type=module <<'CARGO_DIAGNOSTICS' >&2 || true
+          import { readFileSync } from "node:fs";
+
+          for (const line of readFileSync(process.env.CARGO_MESSAGES, "utf8").split(/\r?\n/u)) {
+            if (line.length === 0) continue;
+            try {
+              const message = JSON.parse(line);
+              if (typeof message?.message?.rendered === "string") {
+                process.stderr.write(message.message.rendered);
+              }
+            } catch {
+              // Cargo 的原始退出码仍是失败权威，畸形诊断不得覆盖它。
+            }
+          }
+          CARGO_DIAGNOSTICS
+            echo "Cargo helper 构建失败：exit=$cargo_status" >&2
+            exit "$cargo_status"
+          fi
+          [[ -s "$cargo_messages" ]]
+          CARGO_MESSAGES="$cargo_messages" \
+          RESOLVED_EXECUTABLES="$resolved_executables" \
+          node --input-type=module <<'CARGO_NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const executableTargets = new Map([
+            ["codegraph-host-path-bridge", new Set()],
+            ["codegraph-host-path-daemon", new Set()],
+          ]);
+          const lines = readFileSync(process.env.CARGO_MESSAGES, "utf8").split(/\r?\n/u);
+          for (const [index, line] of lines.entries()) {
+            if (line.length === 0) continue;
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch (error) {
+              throw new Error(`Cargo JSON 第 ${index + 1} 行无效。`, { cause: error });
+            }
+            if (message.reason !== "compiler-artifact") continue;
+            const targetName = message.target?.name;
+            if (
+              !executableTargets.has(targetName) ||
+              !Array.isArray(message.target?.kind) ||
+              !message.target.kind.includes("bin") ||
+              message.executable === null
+            ) {
+              continue;
+            }
+            if (
+              typeof message.executable !== "string" ||
+              message.executable.length === 0 ||
+              /[\0\r\n]/u.test(message.executable)
+            ) {
+              throw new Error(`Cargo 未为 ${targetName} 返回安全 executable path。`);
+            }
+            executableTargets.get(targetName).add(message.executable);
+          }
+          const resolved = {};
+          for (const [targetName, executablePaths] of executableTargets) {
+            if (executablePaths.size !== 1) {
+              throw new Error(
+                `Cargo 必须为 ${targetName} 唯一归因一个 executable path，实际为 ${executablePaths.size}。`,
+              );
+            }
+            resolved[targetName] = [...executablePaths][0];
+          }
+          writeFileSync(process.env.RESOLVED_EXECUTABLES, `${JSON.stringify(resolved)}\n`, {
+            mode: 0o600,
+          });
+          CARGO_NODE
+          bridge_source="$(RESOLVED_EXECUTABLES="$resolved_executables" node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(process.env.RESOLVED_EXECUTABLES, "utf8"))["codegraph-host-path-bridge"])')"
+          daemon_source="$(RESOLVED_EXECUTABLES="$resolved_executables" node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(process.env.RESOLVED_EXECUTABLES, "utf8"))["codegraph-host-path-daemon"])')"
+          expected_bridge_source="$helper_build_home/.cargo-target/release/codegraph-host-path-bridge"
+          expected_daemon_source="$helper_build_home/.cargo-target/release/codegraph-host-path-daemon"
+          [[ "$bridge_source" == "$expected_bridge_source" ]]
+          [[ "$daemon_source" == "$expected_daemon_source" ]]
+
+          file_tool=/usr/bin/file
+          readelf_tool=/usr/bin/readelf
+          [[ -f "$file_tool" && ! -L "$file_tool" && -x "$file_tool" ]]
+          [[ -f "$readelf_tool" && ! -L "$readelf_tool" && -x "$readelf_tool" ]]
+          prove_private_binary() {
+            local label="$1"
+            local source="$2"
+            local source_parent
+            local lstat_output
+            local source_uid
+            local source_gid
+            local source_owner
+            local source_group
+            local source_mode
+            local source_size
+            local source_sha
+            local file_description
+            local elf_header
+            local elf_class
+            local elf_machine
+            local elf_type
+
+            source_parent="$(dirname -- "$source")"
+            printf 'helper-proof[%s] parent-traversal: identity=gatecandidate path=%s\n' "$label" "$source_parent"
+            if ! sudo -u gatecandidate test -x "$source_parent"; then
+              echo "helper-proof[$label] parent-traversal: fail" >&2
+              return 1
+            fi
+            echo "helper-proof[$label] parent-traversal: pass"
+
+            lstat_output="$(sudo stat --printf='type=%F uid=%u gid=%g mode=%a size=%s inode=%i' -- "$source")"
+            printf 'helper-proof[%s] lstat: %s\n' "$label" "$lstat_output"
+            if ! sudo test -f "$source"; then
+              echo "helper-proof[$label] regular: fail" >&2
+              return 1
+            fi
+            echo "helper-proof[$label] regular: pass"
+            if sudo test -L "$source"; then
+              echo "helper-proof[$label] non-symlink: fail" >&2
+              return 1
+            fi
+            echo "helper-proof[$label] non-symlink: pass"
+
+            source_uid="$(sudo stat -c '%u' -- "$source")"
+            source_gid="$(sudo stat -c '%g' -- "$source")"
+            source_owner="$(sudo stat -c '%U' -- "$source")"
+            source_group="$(sudo stat -c '%G' -- "$source")"
+            printf 'helper-proof[%s] owner-group: uid=%s gid=%s owner=%s group=%s\n' \
+              "$label" "$source_uid" "$source_gid" "$source_owner" "$source_group"
+            [[ "$source_uid:$source_gid" == "20001:20001" ]]
+
+            source_mode="$(sudo stat -c '%a' -- "$source")"
+            printf 'helper-proof[%s] numeric-mode: %s\n' "$label" "$source_mode"
+            [[ "$source_mode" =~ ^[0-7]{3,4}$ ]]
+            if (( (8#$source_mode & 0022) != 0 )); then
+              echo "helper-proof[$label] numeric-mode: group/world writable" >&2
+              return 1
+            fi
+
+            source_size="$(sudo stat -c '%s' -- "$source")"
+            printf 'helper-proof[%s] size: %s\n' "$label" "$source_size"
+            [[ "$source_size" =~ ^[1-9][0-9]*$ ]]
+            source_sha="$(sudo sha256sum -- "$source" | cut -d ' ' -f 1)"
+            printf 'helper-proof[%s] sha256: %s\n' "$label" "$source_sha"
+            [[ "$source_sha" =~ ^[a-f0-9]{64}$ ]]
+
+            file_description="$(sudo env LC_ALL=C "$file_tool" --brief -- "$source")"
+            printf 'helper-proof[%s] file: %s\n' "$label" "$file_description"
+            [[ "$file_description" == ELF\ 64-bit\ LSB* ]]
+            [[ "$file_description" == *x86-64* ]]
+            [[ "$file_description" == *executable* ]]
+
+            elf_header="$(sudo env LC_ALL=C "$readelf_tool" -h -- "$source")"
+            elf_class="$(awk -F: '/^[[:space:]]*Class:/{sub(/^[[:space:]]*/, "", $2); print $2; exit}' <<< "$elf_header")"
+            elf_machine="$(awk -F: '/^[[:space:]]*Machine:/{sub(/^[[:space:]]*/, "", $2); print $2; exit}' <<< "$elf_header")"
+            elf_type="$(awk -F: '/^[[:space:]]*Type:/{sub(/^[[:space:]]*/, "", $2); print $2; exit}' <<< "$elf_header")"
+            printf 'helper-proof[%s] elf-class: %s\n' "$label" "$elf_class"
+            printf 'helper-proof[%s] elf-machine: %s\n' "$label" "$elf_machine"
+            printf 'helper-proof[%s] elf-type: %s\n' "$label" "$elf_type"
+            [[ "$elf_class" == "ELF64" ]]
+            [[ "$elf_machine" == "Advanced Micro Devices X86-64" ]]
+            case "$elf_type" in
+              EXEC*|DYN*) ;;
+              *)
+                echo "helper-proof[$label] elf-type: 非可执行 ELF 类型" >&2
+                return 1
+                ;;
+            esac
+
+            if ! sudo -u gatecandidate test -x "$source"; then
+              echo "helper-proof[$label] gatecandidate-x-ok: fail" >&2
+              return 1
+            fi
+            echo "helper-proof[$label] gatecandidate-x-ok: pass"
+          }
+          prove_private_binary bridge "$bridge_source"
+          prove_private_binary daemon "$daemon_source"
+
+          run_zero_argument_probe() {
+            local label="$1"
+            local source="$2"
+            local expected_stderr="$3"
+            local probe_stdout="$material_staging/$label.exec.stdout"
+            local probe_stderr="$material_staging/$label.exec.stderr"
+            local probe_status
+
+            set +e
+            sudo -u gatecandidate env -i \
+              HOME="$helper_build_home" \
+              LANG=C.UTF-8 \
+              PATH=/usr/bin:/bin \
+              TMPDIR="$helper_build_home" \
+              "$source" > "$probe_stdout" 2> "$probe_stderr"
+            probe_status=$?
+            set -e
+            printf 'helper-proof[%s] exec-probe: status=%s stdout-bytes=%s stderr-bytes=%s\n' \
+              "$label" "$probe_status" "$(stat -c '%s' "$probe_stdout")" "$(stat -c '%s' "$probe_stderr")"
+            case "$probe_status" in
+              126|127)
+                echo "helper-proof[$label] exec-probe: shell launch failure" >&2
+                return 1
+                ;;
+            esac
+            if grep -Eiq 'permission denied|exec format' "$probe_stderr"; then
+              echo "helper-proof[$label] exec-probe: loader failure" >&2
+              return 1
+            fi
+            if (( probe_status != 1 )); then
+              echo "helper-proof[$label] exec-probe: unexpected exit=$probe_status" >&2
+              return 1
+            fi
+            [[ ! -s "$probe_stdout" ]] || {
+              echo "helper-proof[$label] exec-probe: unexpected stdout" >&2
+              return 1
+            }
+            if ! cmp --silent -- "$probe_stderr" <(printf '%s\n' "$expected_stderr"); then
+              echo "helper-proof[$label] exec-probe: stderr mismatch" >&2
+              sed -n 'l' "$probe_stderr" >&2
+              return 1
+            fi
+            echo "helper-proof[$label] exec-probe: pass"
+          }
+          run_zero_argument_probe bridge "$bridge_source" BRIDGE_ARGV
+          run_zero_argument_probe daemon "$daemon_source" DAEMON_ARGV
+
+          # 冻结前终止候选 UID 的全部残留进程，消除候选并发改写已验证输出的窗口。
+          sudo pkill -KILL -u 20001 || true
+          for _ in $(seq 1 50); do
+            if ! sudo pgrep -u 20001 >/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          if sudo pgrep -u 20001 >/dev/null; then
+            echo "候选 UID 20001 在冻结前仍有残留进程。" >&2
+            exit 1
+          fi
+
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          [[ "$(stat -c '%u:%g %a' "$material_staging")" == "$runner_uid:$runner_gid 700" ]]
+          bridge_staged="$material_staging/codegraph-host-path-bridge"
+          daemon_staged="$material_staging/codegraph-host-path-daemon"
+          freeze_private_binary() {
+            local label="$1"
+            local source="$2"
+            local staged="$3"
+            local source_sha
+            local staged_sha
+
+            if ! sudo test -f "$source"; then
+              echo "helper-freeze[$label] source regular: fail" >&2
+              return 1
+            fi
+            if sudo test -L "$source"; then
+              echo "helper-freeze[$label] source non-symlink: fail" >&2
+              return 1
+            fi
+            [[ ! -e "$staged" ]]
+            source_sha="$(sudo sha256sum -- "$source" | cut -d ' ' -f 1)"
+            sudo install -o "$runner_uid" -g "$runner_gid" -m 0700 "$source" "$staged"
+            [[ -f "$staged" ]]
+            [[ ! -L "$staged" ]]
+            [[ "$(stat -c '%u:%g %a' "$staged")" == "$runner_uid:$runner_gid 700" ]]
+            staged_sha="$(sha256sum -- "$staged" | cut -d ' ' -f 1)"
+            printf 'helper-freeze[%s] source-sha256=%s staged-sha256=%s\n' \
+              "$label" "$source_sha" "$staged_sha"
+            [[ "$source_sha" == "$staged_sha" ]]
+          }
+          freeze_private_binary bridge "$bridge_source" "$bridge_staged"
+          freeze_private_binary daemon "$daemon_source" "$daemon_staged"
+          bridge_staged_sha="$(sha256sum -- "$bridge_staged" | cut -d ' ' -f 1)"
+          daemon_staged_sha="$(sha256sum -- "$daemon_staged" | cut -d ' ' -f 1)"
+
+          BRIDGE_SOURCE="$bridge_staged" \
+          DAEMON_SOURCE="$daemon_staged" \
           HEAD_OID="$HEAD_OID" \
           MATERIAL_STAGING="$material_staging" \
           node --input-type=module <<'NODE'
@@ -513,15 +791,21 @@ jobs:
           NODE
           sudo install -d -o 0 -g 0 -m 0755 /usr/libexec /usr/share/codegraph-host-path
           sudo install -d -o 0 -g 20001 -m 0750 /etc/codegraph-host-path
-          sudo install -o 0 -g 0 -m 0755 "$bridge_source" /usr/libexec/codegraph-host-path-bridge
-          sudo install -o 0 -g 0 -m 0755 "$daemon_source" /usr/libexec/codegraph-host-path-daemon
+          sudo install -o 0 -g 0 -m 0755 "$bridge_staged" /usr/libexec/codegraph-host-path-bridge
+          sudo install -o 0 -g 0 -m 0755 "$daemon_staged" /usr/libexec/codegraph-host-path-daemon
           sudo install -o 0 -g 20001 -m 0640 "$material_staging/client.key" /etc/codegraph-host-path/client.key
           sudo install -o 0 -g 0 -m 0644 "$material_staging/provenance.json" /usr/share/codegraph-host-path/provenance.json
           sudo install -o 0 -g 0 -m 0644 "$material_staging/release.pub" /usr/share/codegraph-host-path/release.pub
+          [[ -f /usr/libexec/codegraph-host-path-bridge && ! -L /usr/libexec/codegraph-host-path-bridge ]]
+          [[ -f /usr/libexec/codegraph-host-path-daemon && ! -L /usr/libexec/codegraph-host-path-daemon ]]
           bridge_sha="$(sha256sum /usr/libexec/codegraph-host-path-bridge | cut -d ' ' -f 1)"
           daemon_sha="$(sha256sum /usr/libexec/codegraph-host-path-daemon | cut -d ' ' -f 1)"
           expected_bridge_sha="$(node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("/usr/share/codegraph-host-path/provenance.json", "utf8")).bridgeBinarySha256)')"
           expected_daemon_sha="$(node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("/usr/share/codegraph-host-path/provenance.json", "utf8")).daemonBinarySha256)')"
+          [[ "$bridge_sha" == "$bridge_staged_sha" ]]
+          [[ "$daemon_sha" == "$daemon_staged_sha" ]]
+          [[ "$expected_bridge_sha" == "$bridge_staged_sha" ]]
+          [[ "$expected_daemon_sha" == "$daemon_staged_sha" ]]
           [[ "$bridge_sha" == "$expected_bridge_sha" ]]
           [[ "$daemon_sha" == "$expected_daemon_sha" ]]
           [[ "$(stat -c '%U:%G %a' /usr/libexec/codegraph-host-path-bridge)" == "root:root 755" ]]
