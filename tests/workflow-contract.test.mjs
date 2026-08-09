@@ -35,6 +35,20 @@ const win32OrderedBuildClosure = Object.freeze([
   "@codegraph/graph-service",
 ]);
 
+/**
+ * 提取 Portable helper provisioning 的阻断步骤，避免断言误命中 Win32 或清理逻辑。
+ *
+ * @param {string} workflow 完整 workflow 文本。
+ * @returns {string} Portable helper provisioning 步骤文本。
+ */
+function extractPortableHelperProvisionStep(workflow) {
+  const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
+  const provisionStep = /- name: Provision signed Linux host-path helper runtime[\s\S]*?(?=\n\s+- name:)/u.exec(portableJob)?.[0];
+
+  assert.equal(typeof provisionStep, "string");
+  return provisionStep;
+}
+
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
 
@@ -346,6 +360,118 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(cleanupStep, /umount -- \/g \|\| cleanup_status=1/u);
   assert.match(cleanupStep, /exit "\$cleanup_status"/u);
   assert.doesNotMatch(cleanupStep, /rm -rf -- \/g[\s\S]*umount -- \/g/u);
+});
+
+test("Portable helper 私有 build home 由正确身份逐项证明，拒绝 runner 跨 UID 盲断言", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+
+  assert.match(
+    provisionStep,
+    /install -d -o 20001 -g 20001 -m 0700 "\$helper_build_home"/u,
+  );
+  assert.doesNotMatch(provisionStep, /chmod[^\n]*helper_build_home/u);
+  assert.doesNotMatch(
+    provisionStep,
+    /\[\[ -f "\$(?:bridge|daemon)_source" && ! -L "\$(?:bridge|daemon)_source"/u,
+  );
+  assert.match(provisionStep, /helper-proof\[\$label\] parent-traversal/u);
+  assert.match(provisionStep, /sudo -u gatecandidate test -x "\$source_parent"/u);
+  assert.match(provisionStep, /sudo test -f "\$source"/u);
+  assert.match(provisionStep, /if sudo test -L "\$source"/u);
+});
+
+test("Portable helper 从 Cargo JSON 唯一归因两个 executable 并保留 Cargo exit code", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+
+  assert.match(provisionStep, /--message-format=json-render-diagnostics/u);
+  assert.match(provisionStep, /cargo_status=\$\?/u);
+  assert.match(provisionStep, /exit "\$cargo_status"/u);
+  assert.match(provisionStep, /message\.reason !== "compiler-artifact"/u);
+  assert.match(provisionStep, /executablePaths\.size !== 1/u);
+  assert.match(provisionStep, /expected_bridge_source="\$helper_build_home\/\.cargo-target\/release\/codegraph-host-path-bridge"/u);
+  assert.match(provisionStep, /expected_daemon_source="\$helper_build_home\/\.cargo-target\/release\/codegraph-host-path-daemon"/u);
+  assert.match(provisionStep, /\[\[ "\$bridge_source" == "\$expected_bridge_source" \]\]/u);
+  assert.match(provisionStep, /\[\[ "\$daemon_source" == "\$expected_daemon_source" \]\]/u);
+});
+
+test("Portable helper 对两个 binary 输出可归因的文件、ELF 与候选身份诊断", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+  const requiredDiagnostics = [
+    "lstat",
+    "regular",
+    "non-symlink",
+    "owner-group",
+    "numeric-mode",
+    "size",
+    "sha256",
+    "file",
+    "elf-class",
+    "elf-machine",
+    "elf-type",
+    "gatecandidate-x-ok",
+  ];
+
+  for (const diagnostic of requiredDiagnostics) {
+    assert.match(
+      provisionStep,
+      new RegExp(`helper-proof\\[(?:\\$label|%s)\\] ${diagnostic}`, "u"),
+      `缺少 ${diagnostic} 可归因诊断。`,
+    );
+  }
+  assert.match(provisionStep, /"\$file_tool" --brief -- "\$source"/u);
+  assert.match(provisionStep, /"\$readelf_tool" -h -- "\$source"/u);
+  assert.match(provisionStep, /prove_private_binary bridge "\$bridge_source"/u);
+  assert.match(provisionStep, /prove_private_binary daemon "\$daemon_source"/u);
+});
+
+test("Portable helper 以 gatecandidate 真实执行零参数 probe 并精确拒绝异常输出", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+
+  assert.match(provisionStep, /run_zero_argument_probe bridge "\$bridge_source" BRIDGE_ARGV/u);
+  assert.match(provisionStep, /run_zero_argument_probe daemon "\$daemon_source" DAEMON_ARGV/u);
+  assert.match(
+    provisionStep,
+    /sudo -u gatecandidate env -i[\s\S]*?"\$source" > "\$probe_stdout" 2> "\$probe_stderr"/u,
+  );
+  assert.match(provisionStep, /case "\$probe_status" in\s+126\|127\)/u);
+  assert.match(provisionStep, /permission denied\|exec format/u);
+  assert.match(provisionStep, /\[\[ ! -s "\$probe_stdout" \]\]/u);
+  assert.match(
+    provisionStep,
+    /cmp --silent -- "\$probe_stderr" <\(printf '%s\\n' "\$expected_stderr"\)/u,
+  );
+});
+
+test("Portable helper 冻结 candidate 私有输出后只签名并安装 runner-owned staged bytes", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+  const killOffset = provisionStep.indexOf("sudo pkill -KILL -u 20001");
+  const freezeOffset = provisionStep.indexOf("freeze_private_binary bridge");
+  const signOffset = provisionStep.indexOf('node --input-type=module <<\'NODE\'');
+
+  assert.ok(killOffset >= 0 && freezeOffset > killOffset && signOffset > freezeOffset);
+  assert.match(provisionStep, /if sudo pgrep -u 20001/u);
+  assert.match(
+    provisionStep,
+    /sudo install -o "\$runner_uid" -g "\$runner_gid" -m 0700 "\$source" "\$staged"/u,
+  );
+  assert.match(provisionStep, /\[\[ "\$source_sha" == "\$staged_sha" \]\]/u);
+  assert.match(provisionStep, /BRIDGE_SOURCE="\$bridge_staged"/u);
+  assert.match(provisionStep, /DAEMON_SOURCE="\$daemon_staged"/u);
+  assert.match(
+    provisionStep,
+    /install -o 0 -g 0 -m 0755 "\$bridge_staged" \/usr\/libexec\/codegraph-host-path-bridge/u,
+  );
+  assert.match(
+    provisionStep,
+    /install -o 0 -g 0 -m 0755 "\$daemon_staged" \/usr\/libexec\/codegraph-host-path-daemon/u,
+  );
+  assert.match(provisionStep, /\[\[ "\$bridge_sha" == "\$bridge_staged_sha" \]\]/u);
+  assert.match(provisionStep, /\[\[ "\$daemon_sha" == "\$daemon_staged_sha" \]\]/u);
 });
 
 test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 job 合并", async () => {
