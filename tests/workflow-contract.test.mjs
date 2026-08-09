@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import {
   GATE_HARNESS_PORTABLE_ARGUMENT_NAMES_V3,
@@ -13,7 +15,7 @@ const workflowPath = new URL("../.github/workflows/produce-gate-evidence.yml", i
 const harnessPath = new URL("../lib/harness.mjs", import.meta.url);
 const controllerWorkflowPath = new URL("../.github/workflows/controller.yml", import.meta.url);
 const monitorWorkflowPath = new URL("../.github/workflows/drift-monitor.yml", import.meta.url);
-const trustedHarnessSha = "97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f";
+const trustedHarnessSha = "f03e200280d8da8bdd474abe01b9ef2e90f3a631";
 const pnpmArchiveSha256 = "dd19bfd8bcd33a3b38dcce335e8d233194c0a61ffe1f5bcf5047f60f6d4978b8";
 const pnpmWin32ArchiveSha256 =
   "7ac25ba81b8a9f213a307ae89198ba7e636e6c74fa0d775d554ba46e0187358b";
@@ -47,6 +49,56 @@ function extractPortableHelperProvisionStep(workflow) {
 
   assert.equal(typeof provisionStep, "string");
   return provisionStep;
+}
+
+/**
+ * 提取 Portable trusted tool 的纯策略函数，使正负 fixture 执行生产 workflow 的同一组谓词。
+ *
+ * @param {string} provisionStep Portable helper provisioning 步骤文本。
+ * @returns {string} 可独立执行的 Bash 函数定义。
+ */
+function extractTrustedToolPolicyFunction(provisionStep) {
+  const policyFunction = /validate_trusted_system_tool_policy\(\) \{[\s\S]*?\n          \}/u.exec(
+    provisionStep,
+  )?.[0];
+
+  assert.equal(typeof policyFunction, "string");
+  return policyFunction;
+}
+
+/**
+ * 将 fixture 字段编码为 Bash 单引号参数，避免诊断值改变命令结构。
+ *
+ * @param {unknown} value fixture 字段值。
+ * @returns {string} Bash 安全字面量。
+ */
+function quoteBash(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+/**
+ * 在本机 Git Bash 或 POSIX Bash 中执行 workflow 的纯策略函数。
+ *
+ * @param {string} policyFunction workflow 中提取的函数定义。
+ * @param {readonly string[]} fixture 按生产函数参数顺序排列的拓扑证据。
+ * @returns {{status: number | null, stdout: string, stderr: string}} 执行结果。
+ */
+function runTrustedToolPolicyFixture(policyFunction, fixture) {
+  const bashExecutable =
+    process.platform === "win32"
+      ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+      : "bash";
+  const invocation = `validate_trusted_system_tool_policy ${fixture.map(quoteBash).join(" ")}`;
+  const result = spawnSync(bashExecutable, ["-c", `${policyFunction}\n${invocation}\n`], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.error, undefined);
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
@@ -103,10 +155,13 @@ test("Controller check lifecycle 独立于 result CAS，并按 ID readback 验�
 test("reusable producer 固定检出已批准的不可变 GateHarness", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const checkoutBlock = /- name: Checkout immutable GateHarness[\s\S]*?(?=\n\s+- name:)/u.exec(workflow)?.[0];
+  const immutablePins = workflow.match(new RegExp(`ref: ${trustedHarnessSha}`, "gu")) ?? [];
 
   assert.equal(typeof checkoutBlock, "string");
   assert.match(checkoutBlock, /path: trusted-harness/u);
   assert.match(checkoutBlock, new RegExp(`ref: ${trustedHarnessSha}`, "u"));
+  assert.equal(immutablePins.length, 3, "Portable、Win32、merge 必须固定到同一已验证 Harness merge SHA。");
+  assert.doesNotMatch(workflow, /97048ec0c2f6a38716bf3c0b38ac8c6bf31c709f/u);
   assert.doesNotMatch(checkoutBlock, /ref:\s+(?:main|master|HEAD)\b/u);
 });
 
@@ -392,8 +447,86 @@ test("Portable helper 从 Cargo JSON 唯一归因两个 executable 并保留 Car
   assert.match(provisionStep, /executablePaths\.size !== 1/u);
   assert.match(provisionStep, /expected_bridge_source="\$helper_build_home\/\.cargo-target\/release\/codegraph-host-path-bridge"/u);
   assert.match(provisionStep, /expected_daemon_source="\$helper_build_home\/\.cargo-target\/release\/codegraph-host-path-daemon"/u);
-  assert.match(provisionStep, /\[\[ "\$bridge_source" == "\$expected_bridge_source" \]\]/u);
-  assert.match(provisionStep, /\[\[ "\$daemon_source" == "\$expected_daemon_source" \]\]/u);
+  assert.match(provisionStep, /cargo-topology\[bridge\]: resolved=%s expected=%s/u);
+  assert.match(provisionStep, /cargo-topology\[daemon\]: resolved=%s expected=%s/u);
+  assert.match(provisionStep, /if \[\[ "\$bridge_source" != "\$expected_bridge_source" \]\]; then/u);
+  assert.match(provisionStep, /if \[\[ "\$daemon_source" != "\$expected_daemon_source" \]\]; then/u);
+  assert.doesNotMatch(provisionStep, /^\s*\[\[ "\$(?:bridge|daemon)_source" ==/mu);
+});
+
+test("Portable trusted distro symlink alias 解析到可信 regular executable target", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+
+  assert.doesNotMatch(
+    provisionStep,
+    /\[\[ -f "\$readelf_tool" && ! -L "\$readelf_tool" && -x "\$readelf_tool" \]\]/u,
+    "首个失败谓词：! -L /usr/bin/readelf 错误拒绝可信 distro symlink alias。",
+  );
+  const policyFunction = extractTrustedToolPolicyFunction(provisionStep);
+  const result = runTrustedToolPolicyFixture(policyFunction, [
+    "readelf",
+    "/usr/bin/readelf",
+    "symbolic link",
+    "0",
+    "0",
+    "777",
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "regular file",
+    "0",
+    "0",
+    "755",
+    "yes",
+    "yes",
+    "yes",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /trusted-tool\[readelf\] proof:/u);
+  assert.match(result.stdout, /alias=\/usr\/bin\/readelf/u);
+  assert.match(result.stdout, /resolved=\/usr\/bin\/x86_64-linux-gnu-readelf/u);
+});
+
+test("Portable trusted tool 策略对危险 target 与身份漂移全部 fail-closed", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+  const policyFunction = extractTrustedToolPolicyFunction(provisionStep);
+  const trustedFixture = [
+    "readelf",
+    "/usr/bin/readelf",
+    "symbolic link",
+    "0",
+    "0",
+    "777",
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "regular file",
+    "0",
+    "0",
+    "755",
+    "yes",
+    "yes",
+    "yes",
+  ];
+  const cases = [
+    ["dangling symlink", 6, "", /resolved-target: fail/u],
+    ["non-root target", 8, "1000", /target-owner: fail/u],
+    ["group-writable target", 10, "775", /target-mode: fail/u],
+    ["world-writable target", 10, "757", /target-mode: fail/u],
+    ["non-regular target", 7, "directory", /target-regular: fail/u],
+    ["non-executable target", 11, "no", /target-executable: fail/u],
+    ["escaped target", 6, "/tmp/readelf", /resolved-policy: fail/u],
+    ["alias identity drift", 12, "no", /alias-stable: fail/u],
+    ["target identity drift", 13, "no", /target-stable: fail/u],
+  ];
+
+  for (const [name, index, value, expectedFailure] of cases) {
+    const fixture = [...trustedFixture];
+    fixture[index] = value;
+    const result = runTrustedToolPolicyFixture(policyFunction, fixture);
+
+    assert.notEqual(result.status, 0, `${name} 必须被拒绝。`);
+    assert.match(result.stderr, expectedFailure, `${name} 未命中预期首个拒绝谓词。`);
+  }
 });
 
 test("Portable helper 对两个 binary 输出可归因的文件、ELF 与候选身份诊断", async () => {
