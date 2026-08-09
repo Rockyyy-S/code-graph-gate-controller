@@ -22,6 +22,18 @@ const pnpmWin32EntrySha256 =
 const pnpmWin32EntrySize = 98099528;
 const betterSqliteIntegrity =
   "sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==";
+/** 从 Win32 host identity gate 的真实 imports 反向闭合的最小有序构建集合。 */
+const win32OrderedBuildClosure = Object.freeze([
+  "@codegraph/domain",
+  "@codegraph/contracts",
+  "@codegraph/application",
+  "@codegraph/service-client",
+  "@codegraph/adapter-analyzer-typescript",
+  "@codegraph/adapter-git-local",
+  "@codegraph/adapter-host-path-posix-native",
+  "@codegraph/adapter-store-sqlite",
+  "@codegraph/graph-service",
+]);
 
 test("reusable producer 显式接收并绑定外部 workflow commit SHA", async () => {
   const workflow = await readFile(workflowPath, "utf8");
@@ -175,12 +187,8 @@ test("候选 lifecycle、环境、工作树与 artifact 权限均被隔离", asy
   assert.match(workflow, /gatecandidate-install-home/u);
   assert.match(workflow, /install -d -o 0 -g 0 -m 0711 \/tmp\/gatecandidate-home/u);
   assert.match(workflow, /\[\[ ! -e \/g \]\]/u);
-  assert.match(workflow, /echo "GATE_TEMP_ROOT_CREATED=true" >> "\$GITHUB_ENV"/u);
   assert.match(workflow, /--gate-temp-directory \/g/u);
-  assert.match(
-    workflow,
-    /if \[\[ "\$\{GATE_TEMP_ROOT_CREATED:-\}" == "true" \]\]; then\s+sudo rm -rf -- \/g\s+fi/u,
-  );
+  assert.match(workflow, /if mountpoint --quiet \/g; then\s+sudo \/usr\/bin\/umount -- \/g/u);
   assert.match(workflow, /resolved_output="\$\(realpath -m -- "\$output_path"\)"/u);
   assert.match(workflow, /\[\[ "\$resolved_output" != "\$output_path" \]\]/u);
   assert.doesNotMatch(workflow, /sudo -u gatecandidate --chdir=|sudo -D\b/u);
@@ -255,6 +263,91 @@ test("portable producer 只开放显式输出并提供隔离的 Rust 1.88 离线
   );
 });
 
+test("portable producer 在 Harness 前建立真实签名 helper 与受支持 snapshot 运行面", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
+  const filesystemStep = /- name: Create supported btrfs snapshot filesystem[\s\S]*?(?=\n\s+- name:)/u.exec(portableJob)?.[0];
+  const provisionStep = /- name: Provision signed Linux host-path helper runtime[\s\S]*?(?=\n\s+- name:)/u.exec(portableJob)?.[0];
+  const preflightStep = /- name: Verify real Linux host-path helper preflight[\s\S]*?(?=\n\s+- name:)/u.exec(portableJob)?.[0];
+  const cleanupStep = /- name: Tear down portable helper and snapshot runtime[\s\S]*?(?=\n\s+- name:|$)/u.exec(portableJob)?.[0];
+
+  assert.equal(typeof portableJob, "string");
+  assert.equal(typeof filesystemStep, "string");
+  assert.equal(typeof provisionStep, "string");
+  assert.equal(typeof preflightStep, "string");
+  assert.equal(typeof cleanupStep, "string");
+  assert.match(portableJob, /runs-on:\s*ubuntu-24\.04/u);
+  assert.ok(
+    portableJob.indexOf("Create supported btrfs snapshot filesystem") <
+      portableJob.indexOf("Provision signed Linux host-path helper runtime") &&
+      portableJob.indexOf("Provision signed Linux host-path helper runtime") <
+        portableJob.indexOf("Verify real Linux host-path helper preflight") &&
+      portableJob.indexOf("Verify real Linux host-path helper preflight") <
+        portableJob.indexOf("Produce child gate evidence"),
+  );
+
+  assert.match(filesystemStep, /command -v \/usr\/sbin\/mkfs\.btrfs/u);
+  assert.match(filesystemStep, /--find --show "\$gate_image"/u);
+  assert.match(filesystemStep, /mount -t btrfs/u);
+  assert.match(filesystemStep, /findmnt --noheadings --output FSTYPE --target \/g/u);
+  assert.match(filesystemStep, /\[\[ "\$gate_filesystem" == "btrfs" \]\]/u);
+  assert.doesNotMatch(portableJob, /(?:apt-get|apt |dnf |yum |apk )/u);
+
+  assert.match(provisionStep, /cargo build --locked --offline --release/u);
+  assert.match(provisionStep, /--bin codegraph-host-path-bridge/u);
+  assert.match(provisionStep, /--bin codegraph-host-path-daemon/u);
+  assert.match(provisionStep, /\/usr\/libexec\/codegraph-host-path-bridge/u);
+  assert.match(provisionStep, /\/usr\/libexec\/codegraph-host-path-daemon/u);
+  assert.match(provisionStep, /\/etc\/codegraph-host-path\/client\.key/u);
+  assert.match(provisionStep, /\/usr\/share\/codegraph-host-path\/provenance\.json/u);
+  assert.match(provisionStep, /\/usr\/share\/codegraph-host-path\/release\.pub/u);
+  assert.match(provisionStep, /\/run\/codegraph-host-path\/helper\.sock/u);
+  assert.match(provisionStep, /randomBytes\(32\)/u);
+  assert.match(provisionStep, /generateKeyPairSync\("ed25519"\)/u);
+  assert.match(provisionStep, /bridgeBinarySha256/u);
+  assert.match(provisionStep, /daemonBinarySha256/u);
+  assert.match(provisionStep, /manifestSha256/u);
+  assert.match(provisionStep, /signatureKeyId: `ci-job-scoped-/u);
+  assert.match(provisionStep, /signerId: `ci-job-scoped-/u);
+  assert.match(provisionStep, /stat -c '%U:%G %a' \/etc\/codegraph-host-path\)" == "root:gatecandidate 750"/u);
+  assert.match(provisionStep, /stat -c '%U:%G %a' \/etc\/codegraph-host-path\/client\.key/u);
+  assert.match(provisionStep, /stat -c '%U:%G %a' \/run\/codegraph-host-path\/helper\.sock/u);
+  assert.match(provisionStep, /\/run\/codegraph-host-path\/daemon\.pid/u);
+  assert.match(provisionStep, /serve-v1/u);
+  assert.doesNotMatch(provisionStep, /(?:release-root|release-signer|dummy|weak-provider)/iu);
+
+  assert.match(preflightStep, /createInstalledLinuxSnapshotHelperBindingV1/u);
+  assert.match(preflightStep, /captureHostPathPosixNativeV1/u);
+  assert.match(preflightStep, /outcome\.status !== "complete"/u);
+  assert.match(preflightStep, /LINUX_HELPER_INITIALIZATION_FAILED/u);
+  assert.match(preflightStep, /fail-closed preflight/u);
+  assert.match(preflightStep, /release\.pub\.preflight-backup/u);
+  assert.match(preflightStep, /invalid_public_key/u);
+  assert.match(preflightStep, /sudo mv -- "\$release_backup" \/usr\/share\/codegraph-host-path\/release\.pub/u);
+  assert.doesNotMatch(
+    portableJob,
+    /CODEGRAPH_[A-Z0-9_]*(?:OVERRIDE|TEST_PROVIDER)|createTest[A-Za-z0-9]*Provider|dummy socket/iu,
+  );
+
+  const terminateOffset = cleanupStep.indexOf("HOST_PATH_DAEMON_PID");
+  const bridgeOffset = cleanupStep.indexOf("codegraph-host-path-bridge");
+  const unmountOffset = cleanupStep.indexOf("umount -- /g");
+  const loopOffset = cleanupStep.indexOf('--detach "$GATE_BTRFS_LOOP"');
+  const materialOffset = cleanupStep.indexOf("/etc/codegraph-host-path");
+  assert.ok(
+    terminateOffset >= 0 &&
+      bridgeOffset > terminateOffset &&
+      unmountOffset > bridgeOffset &&
+      loopOffset > unmountOffset &&
+      materialOffset > loopOffset,
+  );
+  assert.match(cleanupStep, /if mountpoint --quiet \/g/u);
+  assert.match(cleanupStep, /if mountpoint --quiet \/g; then[\s\S]*umount -- \/g/u);
+  assert.match(cleanupStep, /umount -- \/g \|\| cleanup_status=1/u);
+  assert.match(cleanupStep, /exit "\$cleanup_status"/u);
+  assert.doesNotMatch(cleanupStep, /rm -rf -- \/g[\s\S]*umount -- \/g/u);
+});
+
 test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 job 合并", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const portableJob = /\n  gate-execution:\s*[\s\S]*?(?=\n  gate-execution-win32:)/u.exec(workflow)?.[0];
@@ -264,7 +357,7 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.equal(typeof portableJob, "string");
   assert.equal(typeof win32Job, "string");
   assert.equal(typeof attestationJob, "string");
-  assert.match(portableJob, /runs-on:\s*ubuntu-latest/u);
+  assert.match(portableJob, /runs-on:\s*ubuntu-24\.04/u);
   assert.match(portableJob, /--execution-partition portable/u);
   assert.doesNotMatch(portableJob, /--execution-partition win32/u);
   assert.match(win32Job, /runs-on:\s*windows-latest/u);
@@ -320,21 +413,33 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, /恶意 PATH pnpm sentinel 被调用/u);
   assert.ok(
     win32Job.indexOf("Install frozen dependencies without candidate lifecycle") <
-      win32Job.indexOf("Build trusted POSIX adapter output for Win32 gate"),
+      win32Job.indexOf("Build exact ordered workspace closure for Win32 gate"),
   );
   assert.ok(
-    win32Job.indexOf("Build trusted POSIX adapter output for Win32 gate") <
+    win32Job.indexOf("Build exact ordered workspace closure for Win32 gate") <
       win32Job.indexOf("Produce Win32 host identity evidence"),
   );
-  assert.match(
-    win32Job,
-    /& \$trustedPnpm --dir \$candidateRoot exec tsc[\s\S]*packages\/adapters\/host-path-posix-native\/tsconfig\.build\.json/u,
-  );
-  assert.match(win32Job, /foreach \(\$lifecycle in @\('preinstall', 'install', 'postinstall'\)\)/u);
-  assert.match(win32Job, /npm_config_enable_pre_post_scripts = 'false'/u);
-  assert.match(win32Job, /npm_config_ignore_pnpmfile = 'true'/u);
-  assert.match(win32Job, /'index\.js', 'index\.d\.ts', 'linux-helper\.js', 'linux-helper\.d\.ts'/u);
-  assert.match(win32Job, /可信 POSIX adapter 构建造成 tracked 漂移/u);
+  const buildClosure = /- name: Build exact ordered workspace closure for Win32 gate[\s\S]*?(?=\n\s+- name:)/u.exec(win32Job)?.[0];
+  assert.equal(typeof buildClosure, "string");
+  let previousBuildOffset = -1;
+  for (const packageName of win32OrderedBuildClosure) {
+    const packageOffset = buildClosure.indexOf(`Name = '${packageName}'`);
+    assert.ok(packageOffset > previousBuildOffset, `${packageName} 必须按依赖顺序构建。`);
+    previousBuildOffset = packageOffset;
+  }
+  assert.match(buildClosure, /ProcessStartInfo/u);
+  assert.match(buildClosure, /UseShellExecute = \$false/u);
+  assert.match(buildClosure, /FileName = \$trustedPnpm/u);
+  assert.match(buildClosure, /ArgumentList\.Add/u);
+  assert.match(buildClosure, /npm_config_enable_pre_post_scripts'\] = 'false'/u);
+  assert.match(buildClosure, /npm_config_ignore_pnpmfile'\] = 'true'/u);
+  assert.match(buildClosure, /npm_config_verify_deps_before_run'\] = 'false'/u);
+  assert.match(buildClosure, /PNPM_CONFIG_IGNORE_PNPMFILE'\] = 'true'/u);
+  assert.match(buildClosure, /foreach \(\$relativeOutput in \$build\.Outputs\)/u);
+  assert.match(buildClosure, /\$item\.PSIsContainer/u);
+  assert.match(buildClosure, /\[IO\.FileAttributes\]::ReparsePoint/u);
+  assert.match(buildClosure, /构建输出不是普通非 reparse 文件/u);
+  assert.match(buildClosure, /构建造成 tracked 漂移/u);
   assert.doesNotMatch(win32Job, /--filter @codegraph\/adapter-host-path-posix-native[^\n]*run build/u);
   assert.ok(
     win32Job.indexOf("Revalidate trusted pnpm launcher for evidence") <
