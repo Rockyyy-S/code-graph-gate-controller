@@ -472,7 +472,7 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   );
 });
 
-test("Controller attestation policy 与已提升可信根 producer SHA 保持一致", async () => {
+test("Controller canonical producer 只来自已验证 approval", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -481,14 +481,17 @@ test("Controller attestation policy 与已提升可信根 producer SHA 保持一
     "utf8",
   );
 
-  assert.match(
-    controller,
-    new RegExp(`const producerWorkflowSha = "${approval.producerWorkflowSha}";`, "u"),
-  );
+  assert.doesNotMatch(controller, /const producerWorkflowSha = "[a-f0-9]{40}";/u);
+  assert.doesNotMatch(controller, new RegExp(approval.producerWorkflowSha, "u"));
   assert.match(
     controller,
     /expectedProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u,
   );
+  assert.match(
+    controller,
+    /canonicalProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u,
+  );
+  assert.equal(approval.producerWorkflowSha, "b5bb1069f93fb92640d23df2b803401d4537f59d");
   assert.match(controller, /"--signer-workflow"/u);
   assert.match(controller, /"--signer-digest"/u);
   assert.doesNotMatch(controller, /"--signer-repo"/u);
@@ -511,6 +514,43 @@ test("Controller attestation policy 与已提升可信根 producer SHA 保持一
     controller,
     /"drift-monitor-invalid"[\s\S]*?"controller-invalid"[\s\S]*?trustedSequence/u,
   );
+});
+
+test("Controller 从 candidate authorization 选择 producer 并贯穿 attestation", async () => {
+  const [controller, harness, proposedApproval] = await Promise.all([
+    readFile(new URL("../bin/run-controller.mjs", import.meta.url), "utf8"),
+    readFile(harnessPath, "utf8"),
+    readFile(
+      new URL(
+        "../trusted/proposed/833c11094b9189f2aaefbe85bbc811c504dda0e1.approval.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ).then(JSON.parse),
+  ]);
+
+  assert.doesNotMatch(
+    controller,
+    /const producerWorkflowSha = "[a-f0-9]{40}";/u,
+  );
+  assert.doesNotMatch(controller, new RegExp(proposedApproval.producerWorkflowSha, "u"));
+  assert.match(controller, /canonicalProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u);
+  assert.match(controller, /selectCandidateAuthorization/u);
+  assert.match(controller, /candidateAuthorization\.producerWorkflowSha/u);
+  assert.match(
+    controller,
+    /"--signer-digest",\s*candidateAuthorization\.producerWorkflowSha/u,
+  );
+  assert.match(
+    controller,
+    /producerWorkflowSha: candidateAuthorization\.producerWorkflowSha/u,
+  );
+  assert.match(controller, /trustedRecord: candidateAuthorization\.record/u);
+  assert.match(
+    controller,
+    /assertTrustedCandidateSelectionCurrent\(\s*candidateAuthorization/u,
+  );
+  assert.match(harness, /producer\.workflowSha !== options\.workflowSha/u);
 });
 
 test("monitor 完成事件直接触发 Controller，可信 lease guardian 持续撤销过期 success", async () => {
