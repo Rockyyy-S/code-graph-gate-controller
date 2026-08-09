@@ -28,8 +28,8 @@ permissions:
 jobs:
   gate-execution:
     name: gate-execution-portable
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -228,7 +228,6 @@ jobs:
           sudo cp -a -- "$source_candidate/.git" "$candidate_root/.git"
           [[ ! -e /g ]]
           sudo install -d -o 0 -g 0 -m 0711 /tmp/gatecandidate-home /g
-          echo "GATE_TEMP_ROOT_CREATED=true" >> "$GITHUB_ENV"
           sudo chown -R "$(id -u):20001" "$candidate_root"
           sudo chmod -R u+rwX,g+rX,o-rwx "$candidate_root"
           [[ "$(sudo git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" == "$HEAD_OID" ]]
@@ -365,6 +364,285 @@ jobs:
             fi
           done
 
+      - name: Create supported btrfs snapshot filesystem
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required_tool in /usr/bin/btrfs /usr/bin/findmnt /usr/bin/mount /usr/bin/umount; do
+            [[ -f "$required_tool" && ! -L "$required_tool" && -x "$required_tool" ]]
+          done
+          mkfs_btrfs="$(command -v /usr/sbin/mkfs.btrfs || command -v /usr/bin/mkfs.btrfs)"
+          losetup_tool="$(command -v /usr/sbin/losetup || command -v /usr/bin/losetup)"
+          truncate_tool="$(command -v /usr/bin/truncate)"
+          [[ -f "$mkfs_btrfs" && ! -L "$mkfs_btrfs" && -x "$mkfs_btrfs" ]]
+          [[ -f "$losetup_tool" && ! -L "$losetup_tool" && -x "$losetup_tool" ]]
+          [[ -f "$truncate_tool" && ! -L "$truncate_tool" && -x "$truncate_tool" ]]
+          [[ -d /g && ! -L /g ]]
+          ! mountpoint --quiet /g
+          gate_image="$RUNNER_TEMP/codegraph-gate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.btrfs"
+          gate_loop=""
+          cleanup_failed_filesystem() {
+            if mountpoint --quiet /g; then
+              sudo /usr/bin/umount -- /g || true
+            fi
+            if [[ -n "$gate_loop" ]]; then
+              sudo "$losetup_tool" --detach "$gate_loop" || true
+            fi
+            rm -f -- "$gate_image"
+          }
+          trap cleanup_failed_filesystem EXIT
+          [[ ! -e "$gate_image" ]]
+          "$truncate_tool" --size 4G "$gate_image"
+          gate_loop="$(sudo "$losetup_tool" --find --show "$gate_image")"
+          [[ "$gate_loop" =~ ^/dev/loop[0-9]+$ ]]
+          sudo "$mkfs_btrfs" --force --label codegraph-gate "$gate_loop"
+          sudo /usr/bin/mount -t btrfs -o nosuid,nodev -- "$gate_loop" /g
+          gate_filesystem="$(findmnt --noheadings --output FSTYPE --target /g | tr -d '[:space:]')"
+          gate_source="$(findmnt --noheadings --output SOURCE --target /g | tr -d '[:space:]')"
+          [[ "$gate_filesystem" == "btrfs" ]]
+          [[ "$gate_source" == "$gate_loop" ]]
+          sudo install -d -o 0 -g 20001 -m 0750 /run/codegraph-host-path
+          sudo install -d -o 0 -g 0 -m 0700 /run/codegraph-host-path/snapshots
+          printf 'GATE_BTRFS_IMAGE=%s\n' "$gate_image" >> "$GITHUB_ENV"
+          printf 'GATE_BTRFS_LOOP=%s\n' "$gate_loop" >> "$GITHUB_ENV"
+          printf 'GATE_BTRFS_LOSETUP=%s\n' "$losetup_tool" >> "$GITHUB_ENV"
+          printf 'PORTABLE_SNAPSHOT_RUNTIME_READY=true\n' >> "$GITHUB_ENV"
+          trap - EXIT
+
+      - name: Provision signed Linux host-path helper runtime
+        env:
+          HEAD_OID: ${{ inputs.head_oid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${PORTABLE_SNAPSHOT_RUNTIME_READY:-}" == "true" ]]
+          candidate_root=/tmp/gatecandidate-root/worktree
+          helper_manifest="$candidate_root/packages/adapters/host-path-posix-native/native/codegraph-host-path-helper/Cargo.toml"
+          helper_build_home=/tmp/gatecandidate-helper-build
+          material_staging="$(mktemp -d "$RUNNER_TEMP/codegraph-host-path-materials.XXXXXX")"
+          cleanup_helper_staging() {
+            sudo rm -rf -- "$helper_build_home"
+            rm -rf -- "$material_staging"
+          }
+          trap cleanup_helper_staging EXIT
+          sudo install -d -o 20001 -g 20001 -m 0700 "$helper_build_home"
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            CARGO_NET_OFFLINE=true \
+            CI=true \
+            HOME="$helper_build_home" \
+            LANG=C.UTF-8 \
+            PATH=/opt/trusted-rust/bin:/usr/bin:/bin \
+            TMPDIR="$helper_build_home" \
+            /opt/trusted-rust/bin/cargo build --locked --offline --release \
+              --manifest-path "$helper_manifest" \
+              --bin codegraph-host-path-bridge \
+              --bin codegraph-host-path-daemon
+          bridge_source="$helper_build_home/.cargo-target/release/codegraph-host-path-bridge"
+          daemon_source="$helper_build_home/.cargo-target/release/codegraph-host-path-daemon"
+          [[ -f "$bridge_source" && ! -L "$bridge_source" && -x "$bridge_source" ]]
+          [[ -f "$daemon_source" && ! -L "$daemon_source" && -x "$daemon_source" ]]
+          BRIDGE_SOURCE="$bridge_source" \
+          DAEMON_SOURCE="$daemon_source" \
+          HEAD_OID="$HEAD_OID" \
+          MATERIAL_STAGING="$material_staging" \
+          node --input-type=module <<'NODE'
+          import {
+            createHash,
+            generateKeyPairSync,
+            randomBytes,
+            sign,
+          } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const canonicalJson = (value) => {
+            if (value === null || typeof value === "boolean" || typeof value === "string") {
+              return JSON.stringify(value);
+            }
+            if (typeof value === "number" && Number.isSafeInteger(value) && !Object.is(value, -0)) {
+              return String(value);
+            }
+            if (Array.isArray(value)) {
+              return `[${value.map(canonicalJson).join(",")}]`;
+            }
+            if (typeof value === "object") {
+              return `{${Object.keys(value).sort().map((key) =>
+                `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+              ).join(",")}}`;
+            }
+            throw new Error("provenance 只允许 canonical JSON 子集。");
+          };
+          const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+          const bridgeBinarySha256 = sha256(readFileSync(process.env.BRIDGE_SOURCE));
+          const daemonBinarySha256 = sha256(readFileSync(process.env.DAEMON_SOURCE));
+          const jobIdentity = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-${process.env.HEAD_OID.slice(0, 12)}`;
+          // 固定文件名来自运行时 ABI；签名根仅属于当前 job，私钥不落盘且不得作为 release 材料发布。
+          const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+          const publicDer = publicKey.export({ format: "der", type: "spki" });
+          const publicPrefix = Buffer.from("302a300506032b6570032100", "hex");
+          if (!publicDer.subarray(0, publicPrefix.length).equals(publicPrefix) || publicDer.length !== 44) {
+            throw new Error("Ed25519 公钥编码不符合固定 SPKI 形状。");
+          }
+          const payload = {
+            bridgeBinarySha256,
+            daemonBinarySha256,
+            schemaVersion: 2,
+            signatureKeyId: `ci-job-scoped-key-${jobIdentity}`,
+            signerId: `ci-job-scoped-signer-${jobIdentity}`,
+          };
+          const payloadBytes = Buffer.from(canonicalJson(payload), "utf8");
+          const provenance = {
+            ...payload,
+            manifestSha256: sha256(payloadBytes),
+            signature: sign(null, payloadBytes, privateKey).toString("hex"),
+          };
+          writeFileSync(
+            `${process.env.MATERIAL_STAGING}/client.key`,
+            `${randomBytes(32).toString("hex")}\n`,
+            { mode: 0o600 },
+          );
+          writeFileSync(
+            `${process.env.MATERIAL_STAGING}/provenance.json`,
+            `${canonicalJson(provenance)}\n`,
+            { mode: 0o600 },
+          );
+          writeFileSync(
+            `${process.env.MATERIAL_STAGING}/release.pub`,
+            `${publicDer.subarray(publicPrefix.length).toString("hex")}\n`,
+            { mode: 0o600 },
+          );
+          NODE
+          sudo install -d -o 0 -g 0 -m 0755 /usr/libexec /usr/share/codegraph-host-path
+          sudo install -d -o 0 -g 20001 -m 0750 /etc/codegraph-host-path
+          sudo install -o 0 -g 0 -m 0755 "$bridge_source" /usr/libexec/codegraph-host-path-bridge
+          sudo install -o 0 -g 0 -m 0755 "$daemon_source" /usr/libexec/codegraph-host-path-daemon
+          sudo install -o 0 -g 20001 -m 0640 "$material_staging/client.key" /etc/codegraph-host-path/client.key
+          sudo install -o 0 -g 0 -m 0644 "$material_staging/provenance.json" /usr/share/codegraph-host-path/provenance.json
+          sudo install -o 0 -g 0 -m 0644 "$material_staging/release.pub" /usr/share/codegraph-host-path/release.pub
+          bridge_sha="$(sha256sum /usr/libexec/codegraph-host-path-bridge | cut -d ' ' -f 1)"
+          daemon_sha="$(sha256sum /usr/libexec/codegraph-host-path-daemon | cut -d ' ' -f 1)"
+          expected_bridge_sha="$(node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("/usr/share/codegraph-host-path/provenance.json", "utf8")).bridgeBinarySha256)')"
+          expected_daemon_sha="$(node --input-type=module --eval 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("/usr/share/codegraph-host-path/provenance.json", "utf8")).daemonBinarySha256)')"
+          [[ "$bridge_sha" == "$expected_bridge_sha" ]]
+          [[ "$daemon_sha" == "$expected_daemon_sha" ]]
+          [[ "$(stat -c '%U:%G %a' /usr/libexec/codegraph-host-path-bridge)" == "root:root 755" ]]
+          [[ "$(stat -c '%U:%G %a' /usr/libexec/codegraph-host-path-daemon)" == "root:root 755" ]]
+          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path)" == "root:gatecandidate 750" ]]
+          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
+          [[ "$(stat -c '%U:%G %a' /usr/share/codegraph-host-path/provenance.json)" == "root:root 644" ]]
+          [[ "$(stat -c '%U:%G %a' /usr/share/codegraph-host-path/release.pub)" == "root:root 644" ]]
+          daemon_pid="$(sudo /bin/sh -c 'umask 0007; nohup /usr/libexec/codegraph-host-path-daemon serve-v1 --socket /run/codegraph-host-path/helper.sock --key /etc/codegraph-host-path/client.key --provenance /usr/share/codegraph-host-path/provenance.json --public-key /usr/share/codegraph-host-path/release.pub >/run/codegraph-host-path/daemon.log 2>&1 & echo $!')"
+          [[ "$daemon_pid" =~ ^[1-9][0-9]*$ ]]
+          printf '%s\n' "$daemon_pid" | sudo tee /run/codegraph-host-path/daemon.pid >/dev/null
+          sudo chown 0:0 /run/codegraph-host-path/daemon.pid
+          sudo chmod 0644 /run/codegraph-host-path/daemon.pid
+          for _ in $(seq 1 100); do
+            if [[ -S /run/codegraph-host-path/helper.sock ]] && sudo kill -0 "$daemon_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          [[ -S /run/codegraph-host-path/helper.sock ]]
+          sudo kill -0 "$daemon_pid"
+          [[ "$(sudo readlink -f "/proc/$daemon_pid/exe")" == "/usr/libexec/codegraph-host-path-daemon" ]]
+          sudo chown 0:20001 /run/codegraph-host-path/helper.sock
+          sudo chmod 0660 /run/codegraph-host-path/helper.sock
+          [[ "$(stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
+          printf 'HOST_PATH_DAEMON_PID=%s\n' "$daemon_pid" >> "$GITHUB_ENV"
+          sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
+          cleanup_helper_staging
+          trap - EXIT
+
+      - name: Verify real Linux host-path helper preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root=/tmp/gatecandidate-root/worktree
+          preflight_root=/g/platform-fix156-preflight
+          preflight_home="$preflight_root/home"
+          preflight_tmp="$preflight_root/tmp"
+          cleanup_preflight() {
+            sudo /usr/bin/btrfs subvolume delete -- "$preflight_root" >/dev/null 2>&1 || true
+          }
+          trap cleanup_preflight EXIT
+          sudo /usr/bin/btrfs subvolume create "$preflight_root"
+          sudo chown 20001:20001 "$preflight_root"
+          sudo chmod 0700 "$preflight_root"
+          sudo -u gatecandidate /usr/bin/mkdir -m 0700 "$preflight_home" "$preflight_tmp"
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            CI=true \
+            HOME="$preflight_home" \
+            LANG=C.UTF-8 \
+            PATH=/opt/trusted-pnpm/bin:/usr/bin:/bin \
+            TMPDIR="$preflight_tmp" \
+            XDG_CACHE_HOME="$preflight_home/.cache" \
+            XDG_CONFIG_HOME="$preflight_home/.config" \
+            XDG_DATA_HOME="$preflight_home/.local/share" \
+            npm_config_enable_pre_post_scripts=false \
+            npm_config_ignore_pnpmfile=true \
+            npm_config_verify_deps_before_run=false \
+            pnpm --dir "$candidate_root" exec tsc \
+              -p packages/adapters/host-path-posix-native/tsconfig.build.json --pretty false
+          sudo -u gatecandidate /usr/bin/touch "$preflight_root/input.txt"
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            HOME="$preflight_home" \
+            LANG=C.UTF-8 \
+            PATH=/usr/bin:/bin \
+            PREFLIGHT_ROOT="$preflight_root" \
+            node --input-type=module <<'NODE'
+          import { captureHostPathPosixNativeV1 } from "./packages/adapters/host-path-posix-native/dist/index.js";
+          import { createInstalledLinuxSnapshotHelperBindingV1 } from "./packages/adapters/host-path-posix-native/dist/linux-helper.js";
+
+          const binding = await createInstalledLinuxSnapshotHelperBindingV1();
+          const inputPath = `${process.env.PREFLIGHT_ROOT}/input.txt`;
+          const outcome = await captureHostPathPosixNativeV1({
+            binding,
+            candidates: [{
+              absolutePath: inputPath,
+              candidateIndex: 0,
+              logicalPath: "input.txt",
+              trustedPath: inputPath,
+            }],
+            captureNonce: "platform-fix156-positive",
+            indexingRoot: process.env.PREFLIGHT_ROOT,
+            platform: "linux",
+          });
+          if (outcome.status !== "complete" || outcome.items.length !== 1) {
+            throw new Error(`真实 helper positive preflight 失败：${JSON.stringify(outcome)}`);
+          }
+          NODE
+          release_backup=/run/codegraph-host-path/release.pub.preflight-backup
+          release_digest="$(sha256sum /usr/share/codegraph-host-path/release.pub | cut -d ' ' -f 1)"
+          sudo cp --preserve=mode,ownership -- /usr/share/codegraph-host-path/release.pub "$release_backup"
+          invalid_public_key="$(node --input-type=module --eval 'import { randomBytes } from "node:crypto"; process.stdout.write(randomBytes(32).toString("hex"))')"
+          printf '%s\n' "$invalid_public_key" | sudo tee /usr/share/codegraph-host-path/release.pub >/dev/null
+          sudo chown 0:0 /usr/share/codegraph-host-path/release.pub
+          sudo chmod 0644 /usr/share/codegraph-host-path/release.pub
+          sudo -u gatecandidate env -i --chdir="$candidate_root" \
+            HOME="$preflight_home" \
+            LANG=C.UTF-8 \
+            PATH=/usr/bin:/bin \
+            node --input-type=module <<'NODE'
+          import { createInstalledLinuxSnapshotHelperBindingV1 } from "./packages/adapters/host-path-posix-native/dist/linux-helper.js";
+
+          try {
+            await createInstalledLinuxSnapshotHelperBindingV1();
+            throw new Error("篡改签名根后 helper 未 fail closed。");
+          } catch (error) {
+            if (error?.code !== "LINUX_HELPER_INITIALIZATION_FAILED") {
+              throw error;
+            }
+            process.stdout.write("real helper fail-closed preflight passed\n");
+          }
+          NODE
+          sudo mv -- "$release_backup" /usr/share/codegraph-host-path/release.pub
+          [[ "$(sha256sum /usr/share/codegraph-host-path/release.pub | cut -d ' ' -f 1)" == "$release_digest" ]]
+          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
+          [[ "$(stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
+          sudo kill -0 "$HOST_PATH_DAEMON_PID"
+          sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
+          cleanup_preflight
+          trap - EXIT
+
       - name: Produce child gate evidence
         env:
           BASE_OID: ${{ inputs.base_oid }}
@@ -406,16 +684,48 @@ jobs:
           path: artifacts/
           retention-days: 1
 
-      - name: Remove isolated candidate worktree
+      - name: Tear down portable helper and snapshot runtime
         if: ${{ always() }}
         shell: bash
         run: |
-          sudo pkill -KILL -u 20001 || true
-          if [[ "${GATE_TEMP_ROOT_CREATED:-}" == "true" ]]; then
-            sudo rm -rf -- /g
+          set +e
+          cleanup_status=0
+          daemon_pid="${HOST_PATH_DAEMON_PID:-}"
+          if [[ ! "$daemon_pid" =~ ^[1-9][0-9]*$ ]] && [[ -f /run/codegraph-host-path/daemon.pid ]]; then
+            daemon_pid="$(sudo tr -d '[:space:]' </run/codegraph-host-path/daemon.pid)"
           fi
+          if [[ "$daemon_pid" =~ ^[1-9][0-9]*$ ]]; then
+            sudo kill -TERM "$daemon_pid" 2>/dev/null || true
+            for _ in $(seq 1 50); do
+              if ! sudo kill -0 "$daemon_pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+            if sudo kill -0 "$daemon_pid" 2>/dev/null; then
+              sudo kill -KILL "$daemon_pid" 2>/dev/null || cleanup_status=1
+            fi
+          fi
+          sudo pkill -KILL -f '^/usr/libexec/codegraph-host-path-bridge( |$)' 2>/dev/null || true
+          sudo pkill -KILL -u 20001 || true
+          if mountpoint --quiet /g; then
+            sudo /usr/bin/umount -- /g || cleanup_status=1
+          fi
+          if [[ "${GATE_BTRFS_LOOP:-}" =~ ^/dev/loop[0-9]+$ ]]; then
+            sudo "${GATE_BTRFS_LOSETUP:-/usr/sbin/losetup}" --detach "$GATE_BTRFS_LOOP" || cleanup_status=1
+          fi
+          sudo rm -f -- \
+            /etc/codegraph-host-path/client.key \
+            /usr/share/codegraph-host-path/provenance.json \
+            /usr/share/codegraph-host-path/release.pub \
+            /usr/libexec/codegraph-host-path-bridge \
+            /usr/libexec/codegraph-host-path-daemon
+          sudo rm -rf -- /etc/codegraph-host-path /usr/share/codegraph-host-path /run/codegraph-host-path
+          rm -f -- "${GATE_BTRFS_IMAGE:-}"
+          sudo rmdir -- /g 2>/dev/null || true
           sudo rm -rf -- /tmp/gatecandidate-root /tmp/gatecandidate-home \
-            /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
+            /tmp/gatecandidate-helper-build /tmp/gatecandidate-install-home /tmp/gatecandidate-install-tmp
+          exit "$cleanup_status"
 
   gate-execution-win32:
     name: gate-execution-win32
@@ -656,7 +966,7 @@ jobs:
           "HOST_PATH_INVOCATION_ATTESTATION=$(Join-Path $artifactDirectory 'host-path-invocation.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PATH_RUNTIME_ATTESTATION=$(Join-Path $artifactDirectory 'win32-path-runtime.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Build trusted POSIX adapter output for Win32 gate
+      - name: Build exact ordered workspace closure for Win32 gate
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -664,37 +974,141 @@ jobs:
           $candidateRoot = $env:CANDIDATE_ROOT
           if (-not [IO.Path]::IsPathFullyQualified($trustedPnpm)) { throw '可信 pnpm 路径不是绝对路径。' }
           if (-not [IO.Path]::IsPathFullyQualified($candidateRoot)) { throw '候选根路径不是绝对路径。' }
-          $packagePath = Join-Path $candidateRoot 'packages/adapters/host-path-posix-native/package.json'
-          $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
-          if ($package.name -ne '@codegraph/adapter-host-path-posix-native') {
-            throw 'POSIX adapter package identity 漂移。'
-          }
-          foreach ($lifecycle in @('preinstall', 'install', 'postinstall')) {
-            if ($null -ne $package.scripts.$lifecycle) { throw "候选安装 lifecycle 未保持禁用：$lifecycle" }
-          }
-          $previousEnablePrePost = $env:npm_config_enable_pre_post_scripts
-          $previousIgnorePnpmfile = $env:npm_config_ignore_pnpmfile
-          try {
-            $env:npm_config_enable_pre_post_scripts = 'false'
-            $env:npm_config_ignore_pnpmfile = 'true'
-            & $trustedPnpm --dir $candidateRoot exec tsc `
-              -p packages/adapters/host-path-posix-native/tsconfig.build.json --pretty false
-            if ($LASTEXITCODE -ne 0) { throw '可信 POSIX adapter TypeScript 构建失败。' }
-          } finally {
-            $env:npm_config_enable_pre_post_scripts = $previousEnablePrePost
-            $env:npm_config_ignore_pnpmfile = $previousIgnorePnpmfile
-          }
-          $distRoot = Join-Path $candidateRoot 'packages/adapters/host-path-posix-native/dist'
-          foreach ($relativeOutput in @('index.js', 'index.d.ts', 'linux-helper.js', 'linux-helper.d.ts')) {
-            $outputPath = Join-Path $distRoot $relativeOutput
-            $item = Get-Item -LiteralPath $outputPath -Force
-            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-              throw "POSIX adapter 输出不是普通文件：$relativeOutput"
+
+          function Invoke-TrustedPnpm {
+            param([string[]]$Arguments)
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $trustedPnpm
+            $startInfo.WorkingDirectory = $candidateRoot
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            foreach ($argument in $Arguments) {
+              $startInfo.ArgumentList.Add($argument)
+            }
+            $startInfo.Environment['CI'] = 'true'
+            $startInfo.Environment['npm_config_enable_pre_post_scripts'] = 'false'
+            $startInfo.Environment['npm_config_ignore_pnpmfile'] = 'true'
+            $startInfo.Environment['npm_config_verify_deps_before_run'] = 'false'
+            $startInfo.Environment['PNPM_CONFIG_ENABLE_PRE_POST_SCRIPTS'] = 'false'
+            $startInfo.Environment['PNPM_CONFIG_IGNORE_PNPMFILE'] = 'true'
+            $startInfo.Environment['PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN'] = 'false'
+            $startInfo.Environment.Remove('npm_execpath')
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            if (-not $process.Start()) { throw '可信 pnpm 进程未启动。' }
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            $stdout = $stdoutTask.GetAwaiter().GetResult()
+            $stderr = $stderrTask.GetAwaiter().GetResult()
+            if ($process.ExitCode -ne 0) {
+              throw "可信 pnpm 构建失败，exit=$($process.ExitCode)`n$stdout`n$stderr"
             }
           }
-          & git -C $candidateRoot diff --quiet --no-ext-diff HEAD --
-          if ($LASTEXITCODE -ne 0) { throw '可信 POSIX adapter 构建造成 tracked 漂移。' }
-          if (Test-Path -LiteralPath $env:PATH_SENTINEL_MARKER) { throw '恶意 PATH pnpm sentinel 被调用。' }
+
+          # 该顺序从 Win32 host identity gate 的真实 imports 反向闭合，禁止退回单包 bootstrap。
+          $buildClosure = @(
+            [ordered]@{
+              Name = '@codegraph/domain'
+              PackageJson = 'packages/domain/package.json'
+              Project = 'packages/domain/tsconfig.build.json'
+              Outputs = @('packages/domain/dist/index.js', 'packages/domain/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/contracts'
+              PackageJson = 'packages/contracts/package.json'
+              Project = 'packages/contracts/tsconfig.build.json'
+              Outputs = @('packages/contracts/dist/index.js', 'packages/contracts/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/application'
+              PackageJson = 'packages/application/package.json'
+              Project = 'packages/application/tsconfig.build.json'
+              Outputs = @('packages/application/dist/index.js', 'packages/application/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/service-client'
+              PackageJson = 'packages/service-client/package.json'
+              Project = 'packages/service-client/tsconfig.build.json'
+              Outputs = @('packages/service-client/dist/index.js', 'packages/service-client/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/adapter-analyzer-typescript'
+              PackageJson = 'packages/adapters/analyzer-typescript/package.json'
+              Project = 'packages/adapters/analyzer-typescript/tsconfig.build.json'
+              Outputs = @('packages/adapters/analyzer-typescript/dist/index.js', 'packages/adapters/analyzer-typescript/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/adapter-git-local'
+              PackageJson = 'packages/adapters/git-local/package.json'
+              Project = 'packages/adapters/git-local/tsconfig.build.json'
+              Outputs = @('packages/adapters/git-local/dist/index.js', 'packages/adapters/git-local/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/adapter-host-path-posix-native'
+              PackageJson = 'packages/adapters/host-path-posix-native/package.json'
+              Project = 'packages/adapters/host-path-posix-native/tsconfig.build.json'
+              Outputs = @(
+                'packages/adapters/host-path-posix-native/dist/index.js',
+                'packages/adapters/host-path-posix-native/dist/index.d.ts',
+                'packages/adapters/host-path-posix-native/dist/linux-helper.js',
+                'packages/adapters/host-path-posix-native/dist/linux-helper.d.ts'
+              )
+            },
+            [ordered]@{
+              Name = '@codegraph/adapter-store-sqlite'
+              PackageJson = 'packages/adapters/store-sqlite/package.json'
+              Project = 'packages/adapters/store-sqlite/tsconfig.build.json'
+              Outputs = @('packages/adapters/store-sqlite/dist/index.js', 'packages/adapters/store-sqlite/dist/index.d.ts')
+            },
+            [ordered]@{
+              Name = '@codegraph/graph-service'
+              PackageJson = 'apps/graph-service/package.json'
+              Project = 'apps/graph-service/tsconfig.build.json'
+              Outputs = @(
+                'apps/graph-service/dist/index.js',
+                'apps/graph-service/dist/index.d.ts',
+                'apps/graph-service/dist/main.js'
+              )
+            }
+          )
+          foreach ($build in $buildClosure) {
+            $packagePath = Join-Path $candidateRoot $build.PackageJson
+            $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+            if ($package.name -ne $build.Name) { throw "workspace package identity 漂移：$($build.Name)" }
+            foreach ($lifecycle in @('preinstall', 'install', 'postinstall')) {
+              if ($null -ne $package.scripts.$lifecycle) {
+                throw "候选安装 lifecycle 未保持禁用：$($build.Name)/$lifecycle"
+              }
+            }
+            $pnpmArguments = @(
+              '--dir', $candidateRoot,
+              'exec', 'tsc',
+              '-p', $build.Project,
+              '--pretty', 'false'
+            )
+            Invoke-TrustedPnpm -Arguments $pnpmArguments
+            foreach ($relativeOutput in $build.Outputs) {
+              $outputPath = Join-Path $candidateRoot $relativeOutput
+              $item = Get-Item -LiteralPath $outputPath -Force
+              if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "构建输出不是普通非 reparse 文件：$relativeOutput"
+              }
+            }
+            $distRoot = Split-Path -Parent (Join-Path $candidateRoot $build.Outputs[0])
+            foreach ($item in Get-ChildItem -LiteralPath $distRoot -Recurse -Force) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "构建输出树包含 reparse 节点：$($item.FullName)"
+              }
+            }
+            & git -C $candidateRoot diff --quiet --no-ext-diff HEAD --
+            if ($LASTEXITCODE -ne 0) { throw "workspace 构建造成 tracked 漂移：$($build.Name)" }
+            if (Test-Path -LiteralPath $env:PATH_SENTINEL_MARKER) {
+              throw "恶意 PATH pnpm sentinel 被调用：$($build.Name)"
+            }
+          }
 
       - name: Revalidate trusted pnpm launcher for evidence
         env:
