@@ -212,7 +212,7 @@ test("可信 registry sequence=24 消费精确 bec9ed7 proposal 并绑定新 pro
   );
 });
 
-test("sequence 24 提升后不存在已消费 proposal 且不会隐式生成 sequence 25", async () => {
+test("sequence 24 信任根加载 PR 9 exact head 的 sequence 25 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
@@ -221,12 +221,33 @@ test("sequence 24 提升后不存在已消费 proposal 且不会隐式生成 seq
     {
       currentRecord,
       expectedProducerWorkflowSha: "b5bb1069f93fb92640d23df2b803401d4537f59d",
-      now: Date.parse("2026-08-03T19:21:00+08:00"),
+      now: Date.parse("2026-08-09T10:00:00+08:00"),
     },
   );
 
   assert.equal(currentRecord.sequence, 24);
-  assert.deepEqual(proposals, []);
+  assert.equal(proposals.length, 1);
+  const [{ approval, record }] = proposals;
+  assert.deepEqual(record, {
+    approvalEvidenceDigest: "dd3ea96e9d7b5382771afac84487c6b024688fa60f01548499618db396cb5c7f",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    effectiveAt: "2026-08-09T09:50:27+08:00",
+    expiresAt: "2026-08-16T09:50:27+08:00",
+    gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
+    gateRegistryDigest: "61490da6feecb905711b23157911a51280b3afd8f378bf795c9562b078549ddc",
+    headOid: "5335643ddc7804260aeeda16fd02fbc61719800d",
+    providerRepositoryId: "1303415307",
+    pullNumber: 9,
+    schemaVersion: 1,
+    sequence: 25,
+    sourceCommit: "5335643ddc7804260aeeda16fd02fbc61719800d",
+  });
+  assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
+  assert.equal(approval.approvedBy, "Rockyyy-S");
+  assert.equal(
+    approval.producerWorkflowSha,
+    "b5bb1069f93fb92640d23df2b803401d4537f59d",
+  );
 });
 
 test("可信批准拒绝 digest、sequence、source commit 或 producer 漂移", async () => {
