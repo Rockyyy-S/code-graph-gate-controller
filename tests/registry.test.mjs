@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { sha256CanonicalJson } from "../lib/canonical-json.mjs";
+import { loadHarnessTrustedRecordForCandidate } from "../lib/harness.mjs";
 import {
   loadApprovedProposals,
   parseEvidenceProducerId,
@@ -88,6 +89,22 @@ function createProposedPair({
       sourceCommit: headOid,
     },
   };
+}
+
+/** 把 proposed record/approval 以独立文件写入测试目录。 */
+async function writeProposedPair(directory, name, pair, { includeApproval = true } = {}) {
+  const writes = [
+    writeFile(path.join(directory, `${name}.json`), JSON.stringify(pair.record)),
+  ];
+  if (includeApproval) {
+    writes.push(
+      writeFile(
+        path.join(directory, `${name}.approval.json`),
+        JSON.stringify(pair.approval),
+      ),
+    );
+  }
+  await Promise.all(writes);
 }
 
 test("candidate authorization 原子返回 canonical 或 exact proposal 的 record/producer", async () => {
@@ -357,6 +374,168 @@ test("sequence 24 信任根按 exact head 加载新旧 sequence 25 proposal", as
     });
     assert.equal(selected.producerWorkflowSha, proposal.approval.producerWorkflowSha);
     assert.equal(selected.record.sourceCommit, proposal.record.headOid);
+  }
+});
+
+test("Harness 当前 exact head 不受其他合法 proposal 的 producer 污染", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "harness-multi-proposal-"));
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const currentProducerWorkflowSha = "b".repeat(40);
+  const fixtures = [
+    ["old", createProposedPair({
+      currentRecord,
+      effectiveAt: "2026-08-09T01:00:00Z",
+      expiresAt: "2026-08-10T01:00:00Z",
+      gateRegistryDigest: "5".repeat(64),
+      headOid: "6".repeat(40),
+      producerWorkflowSha: "a".repeat(40),
+      pullNumber: 9,
+    })],
+    ["current", createProposedPair({
+      currentRecord,
+      effectiveAt: "2026-08-09T02:00:00Z",
+      expiresAt: "2026-08-10T02:00:00Z",
+      gateRegistryDigest: "7".repeat(64),
+      headOid: "8".repeat(40),
+      producerWorkflowSha: currentProducerWorkflowSha,
+      pullNumber: 9,
+    })],
+  ];
+  try {
+    for (const [name, fixture] of fixtures) {
+      await writeProposedPair(directory, name, fixture);
+    }
+
+    const selected = await loadHarnessTrustedRecordForCandidate({
+      currentRecord,
+      headOid: fixtures[1][1].record.headOid,
+      now: Date.parse("2026-08-09T12:00:00Z"),
+      proposedRecordDirectory: directory,
+      providerRepositoryId: currentRecord.providerRepositoryId,
+      pullNumber: fixtures[1][1].record.pullNumber,
+      registryDigest: fixtures[1][1].record.gateRegistryDigest,
+      workflowSha: currentProducerWorkflowSha,
+    });
+    assert.equal(selected.sourceCommit, fixtures[1][1].record.headOid);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("Harness exact-head 选择对 duplicate、wrong producer、expiry、digest mix、missing approval 与 canonical drift fail closed", async () => {
+  const currentRecord = {
+    approvalEvidenceDigest: "1".repeat(64),
+    effectiveAt: "2026-08-09T00:00:00Z",
+    gateImplementationDigest: "2".repeat(64),
+    gateRegistryDigest: "3".repeat(64),
+    providerRepositoryId: "1303415307",
+    schemaVersion: 1,
+    sequence: 24,
+    sourceCommit: "4".repeat(40),
+  };
+  const currentHead = "5".repeat(40);
+  const currentProducerWorkflowSha = "6".repeat(40);
+  const requestedRegistryDigest = "7".repeat(64);
+  const now = Date.parse("2026-08-09T12:00:00Z");
+  const createCurrentPair = (overrides = {}) => createProposedPair({
+    currentRecord,
+    effectiveAt: "2026-08-09T01:00:00Z",
+    expiresAt: "2026-08-10T01:00:00Z",
+    gateRegistryDigest: requestedRegistryDigest,
+    headOid: currentHead,
+    producerWorkflowSha: currentProducerWorkflowSha,
+    pullNumber: 9,
+    ...overrides,
+  });
+  const select = (directory, overrides = {}) => loadHarnessTrustedRecordForCandidate({
+    currentRecord,
+    headOid: currentHead,
+    now,
+    proposedRecordDirectory: directory,
+    providerRepositoryId: currentRecord.providerRepositoryId,
+    pullNumber: 9,
+    registryDigest: requestedRegistryDigest,
+    workflowSha: currentProducerWorkflowSha,
+    ...overrides,
+  });
+  const scenarios = [
+    {
+      name: "duplicate",
+      pattern: /多个|冲突/u,
+      prepare: async (directory) => {
+        await Promise.all([
+          writeProposedPair(directory, "first", createCurrentPair()),
+          writeProposedPair(directory, "second", createCurrentPair()),
+        ]);
+      },
+    },
+    {
+      name: "wrong-producer",
+      pattern: /ProposedGateRegistryApprovalV1/u,
+      prepare: (directory) => writeProposedPair(
+        directory,
+        "wrong-producer",
+        createCurrentPair({ producerWorkflowSha: "8".repeat(40) }),
+      ),
+    },
+    {
+      name: "expired",
+      pattern: /ProposedGateRegistryApprovalV1/u,
+      prepare: (directory) => writeProposedPair(
+        directory,
+        "expired",
+        createCurrentPair({ expiresAt: "2026-08-09T11:00:00Z" }),
+      ),
+    },
+    {
+      name: "digest-mix",
+      pattern: /digest/u,
+      prepare: (directory) => writeProposedPair(directory, "digest-mix", createCurrentPair()),
+      selectionOverrides: { registryDigest: "9".repeat(64) },
+    },
+    {
+      name: "missing-approval",
+      pattern: /ENOENT|no such file/u,
+      prepare: (directory) => writeProposedPair(
+        directory,
+        "missing-approval",
+        createCurrentPair(),
+        { includeApproval: false },
+      ),
+    },
+    {
+      name: "canonical-drift",
+      pattern: /ProposedGateRegistryApprovalV1/u,
+      prepare: (directory) => {
+        const pair = createCurrentPair();
+        pair.approval.baseGateRegistryDigest = "a".repeat(64);
+        pair.record.baseGateRegistryDigest = pair.approval.baseGateRegistryDigest;
+        pair.record.approvalEvidenceDigest = sha256CanonicalJson(pair.approval);
+        return writeProposedPair(directory, "canonical-drift", pair);
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const directory = await mkdtemp(path.join(tmpdir(), `harness-${scenario.name}-`));
+    try {
+      await scenario.prepare(directory);
+      await assert.rejects(
+        select(directory, scenario.selectionOverrides),
+        scenario.pattern,
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   }
 });
 
