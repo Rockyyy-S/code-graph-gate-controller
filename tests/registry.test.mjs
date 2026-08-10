@@ -285,12 +285,12 @@ test("可信 registry sequence=24 消费精确 bec9ed7 proposal 并绑定新 pro
   );
 });
 
-test("sequence 24 信任根按 exact head 加载新旧 sequence 25 proposal", async () => {
+test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
   const canonicalProducerWorkflowSha = "b5bb1069f93fb92640d23df2b803401d4537f59d";
-  const now = Date.parse("2026-08-09T16:00:00+08:00");
+  const now = Date.parse("2026-08-10T17:06:38+08:00");
   const proposals = await loadApprovedProposals(
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
@@ -300,16 +300,19 @@ test("sequence 24 信任根按 exact head 加载新旧 sequence 25 proposal", as
   );
 
   assert.equal(currentRecord.sequence, 24);
-  assert.equal(proposals.length, 2);
+  assert.equal(proposals.length, 3);
   const proposalsByHead = new Map(
     proposals.map((proposal) => [proposal.record.headOid, proposal]),
   );
   const oldHead = "833c11094b9189f2aaefbe85bbc811c504dda0e1";
   const newHead = "9b0210f572bd63c6614d13d60b6b28a1bb4aa246";
+  const currentHead = "2a11fcd1cce2a8d9ec41483b43077d55d24f3474";
   const oldProposal = proposalsByHead.get(oldHead);
   const newProposal = proposalsByHead.get(newHead);
+  const currentProposal = proposalsByHead.get(currentHead);
   assert.ok(oldProposal);
   assert.ok(newProposal);
+  assert.ok(currentProposal);
   assert.deepEqual(oldProposal.record, {
     approvalEvidenceDigest: "7c695e1e86306963fa30e022e61953e5fb746e210d47faf3ab0445704848fd08",
     baseGateRegistryDigest: currentRecord.gateRegistryDigest,
@@ -361,7 +364,36 @@ test("sequence 24 信任根按 exact head 加载新旧 sequence 25 proposal", as
     canonicalProducerWorkflowSha,
   );
 
-  for (const proposal of [oldProposal, newProposal]) {
+  assert.deepEqual(currentProposal.record, {
+    approvalEvidenceDigest: "6c93dbd20898215cb2aa23b1040f76c94bfcb2b612eb7e0896e439b60bc39537",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    effectiveAt: "2026-08-10T17:06:37+08:00",
+    expiresAt: "2026-08-17T17:06:37+08:00",
+    gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
+    gateRegistryDigest: "f0a95f6f3a88908aee584b873676291530f351b0326e4e205e09318f815feeb1",
+    headOid: currentHead,
+    providerRepositoryId: "1303415307",
+    pullNumber: 9,
+    schemaVersion: 1,
+    sequence: 25,
+    sourceCommit: currentHead,
+  });
+  assert.equal(
+    currentProposal.record.approvalEvidenceDigest,
+    sha256CanonicalJson(currentProposal.approval),
+  );
+  assert.equal(currentProposal.approval.approvedBy, "Rockyyy-S");
+  assert.equal(
+    currentProposal.approval.producerWorkflowSha,
+    "2cc5b1206ba64c1e60702159154cf58ef903da70",
+  );
+  assert.notEqual(
+    currentProposal.approval.producerWorkflowSha,
+    canonicalProducerWorkflowSha,
+  );
+
+  // 同一 sequence 的历史 proposal 必须共存，并由 repository/PR/exact head 唯一选择。
+  for (const proposal of [oldProposal, newProposal, currentProposal]) {
     const selected = selectCandidateAuthorization({
       canonicalProducerWorkflowSha,
       currentRecord,
