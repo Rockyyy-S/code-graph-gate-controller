@@ -15,7 +15,7 @@
 | key/socket/PID 受保护路径由 root 证明与清理 | workflow contract | security regression | pass |
 | preflight 最小环境显式包含可信 Node 目录 | workflow contract | runtime regression | pass |
 | Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `ebaeedc...` 已发布） |
-| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `5b04f29...`） |
+| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `34300ed...`） |
 
 ## Happy-Path Validation
 
@@ -54,5 +54,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `ebaeedc...` 已把验证后的 setup-node 目录加入三个 preflight 最小环境，并由 code-graph head `5b04f29...` 回钉；registry digest `9ad6333...` 与 implementation digest `59d84ab...` 已获 exact-head proposal 授权。
+- Result summary: producer `ebaeedc...` 保持不变；code-graph head `34300ed...` 修复 daemon epoch 授权组/mode，并让 Hosted Win32 合同按既有 close 重试语义收敛；registry digest `9ad6333...` 与 implementation digest `59d84ab...` 已获 exact-head proposal 授权。
 - Incomplete items and reasons: Hosted Portable/Win32 evidence 与最终 `architecture-required` 尚待 proposal 合并后重新运行或完成。
