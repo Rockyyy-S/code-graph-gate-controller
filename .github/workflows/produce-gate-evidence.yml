@@ -1024,6 +1024,9 @@ jobs:
           preflight_root=/g/platform-fix156-preflight
           preflight_home="$preflight_root/home"
           preflight_tmp="$preflight_root/tmp"
+          node_tool="$(realpath -- "$(command -v node)")"
+          node_bin_dir="$(dirname -- "$node_tool")"
+          [[ -f "$node_tool" && ! -L "$node_tool" && -x "$node_tool" ]]
           cleanup_preflight() {
             sudo /usr/bin/btrfs subvolume delete -- "$preflight_root" >/dev/null 2>&1 || true
           }
@@ -1036,7 +1039,7 @@ jobs:
             CI=true \
             HOME="$preflight_home" \
             LANG=C.UTF-8 \
-            PATH=/opt/trusted-pnpm/bin:/usr/bin:/bin \
+            PATH="$node_bin_dir:/opt/trusted-pnpm/bin:/usr/bin:/bin" \
             TMPDIR="$preflight_tmp" \
             XDG_CACHE_HOME="$preflight_home/.cache" \
             XDG_CONFIG_HOME="$preflight_home/.config" \
@@ -1050,7 +1053,7 @@ jobs:
           sudo -u gatecandidate env -i --chdir="$candidate_root" \
             HOME="$preflight_home" \
             LANG=C.UTF-8 \
-            PATH=/usr/bin:/bin \
+            PATH="$node_bin_dir:/usr/bin:/bin" \
             PREFLIGHT_ROOT="$preflight_root" \
             node --input-type=module <<'NODE'
           import { captureHostPathPosixNativeV1 } from "./packages/adapters/host-path-posix-native/dist/index.js";
@@ -1084,7 +1087,7 @@ jobs:
           sudo -u gatecandidate env -i --chdir="$candidate_root" \
             HOME="$preflight_home" \
             LANG=C.UTF-8 \
-            PATH=/usr/bin:/bin \
+            PATH="$node_bin_dir:/usr/bin:/bin" \
             node --input-type=module <<'NODE'
           import { createInstalledLinuxSnapshotHelperBindingV1 } from "./packages/adapters/host-path-posix-native/dist/linux-helper.js";
 

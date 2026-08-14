@@ -388,6 +388,17 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
 
   assert.match(preflightStep, /createInstalledLinuxSnapshotHelperBindingV1/u);
   assert.match(preflightStep, /captureHostPathPosixNativeV1/u);
+  assert.match(preflightStep, /node_tool="\$\(realpath -- "\$\(command -v node\)"\)"/u);
+  assert.match(preflightStep, /node_bin_dir="\$\(dirname -- "\$node_tool"\)"/u);
+  assert.match(preflightStep, /\[\[ -f "\$node_tool" && ! -L "\$node_tool" && -x "\$node_tool" \]\]/u);
+  assert.match(
+    preflightStep,
+    /PATH="\$node_bin_dir:\/opt\/trusted-pnpm\/bin:\/usr\/bin:\/bin"/u,
+  );
+  assert.equal(
+    preflightStep.match(/PATH="\$node_bin_dir:\/usr\/bin:\/bin"/gu)?.length,
+    2,
+  );
   assert.match(preflightStep, /outcome\.status !== "complete"/u);
   assert.match(preflightStep, /LINUX_HELPER_INITIALIZATION_FAILED/u);
   assert.match(preflightStep, /fail-closed preflight/u);
