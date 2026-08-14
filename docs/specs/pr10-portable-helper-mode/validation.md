@@ -10,7 +10,8 @@
 | Cargo 前固定 `0022` umask | workflow contract 顺序断言 | regression | pass |
 | 不以 chmod 修补候选产物 | workflow contract 负断言 | security regression | pass |
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `303f54e...` 已发布） |
+| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `06866f6...`） |
 
 ## Happy-Path Validation
 
@@ -45,5 +46,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: 新测试修复前失败、修复后通过；controller 全量 183 项测试通过。
-- Incomplete items and reasons: Hosted portable 验证仍需先发布新的不可变 producer SHA。
+- Result summary: 新测试修复前失败、修复后通过；producer PR #41 已合并；head `06866f6...` proposal 校验及 controller 全量 183 项测试通过。
+- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 仍需在 proposal 合并后重新运行。
