@@ -1056,7 +1056,12 @@ jobs:
             PATH="$node_bin_dir:/usr/bin:/bin" \
             PREFLIGHT_ROOT="$preflight_root" \
             node --input-type=module <<'NODE'
-          import { captureHostPathPosixNativeV1 } from "./packages/adapters/host-path-posix-native/dist/index.js";
+          import {
+            captureHostPathPosixNativeV1,
+            HOST_PATH_POSIX_ABI_VERSION,
+            HOST_PATH_POSIX_PROTOCOL_VERSION,
+            validateHostPathPosixCapabilityV1,
+          } from "./packages/adapters/host-path-posix-native/dist/index.js";
           import { createInstalledLinuxSnapshotHelperBindingV1 } from "./packages/adapters/host-path-posix-native/dist/linux-helper.js";
 
           const binding = await createInstalledLinuxSnapshotHelperBindingV1();
@@ -1074,6 +1079,41 @@ jobs:
             platform: "linux",
           });
           if (outcome.status !== "complete" || outcome.items.length !== 1) {
+            if (outcome.status === "rejected" && outcome.reason === "PROVIDER_ERROR") {
+              let diagnosticCode = "PROVIDER_EXCEPTION";
+              try {
+                const rawCapability = await binding.provider.getCapability();
+                const capability = validateHostPathPosixCapabilityV1(rawCapability, {
+                  platform: "linux",
+                  trustedProvenance: binding.trustedProvenance,
+                });
+                if (capability.status === "accepted") {
+                  diagnosticCode = "PROVIDER_RETURNED";
+                  await binding.provider.capture({
+                    abiVersion: HOST_PATH_POSIX_ABI_VERSION,
+                    candidates: [{
+                      absolutePath: inputPath,
+                      candidateIndex: 0,
+                      logicalPath: "input.txt",
+                      trustedPath: inputPath,
+                    }],
+                    capabilityDigest: capability.validated.capabilityDigest,
+                    captureNonce: "platform-fix156-positive-diagnostic",
+                    indexingRoot: process.env.PREFLIGHT_ROOT,
+                    platform: "linux",
+                    protocolVersion: HOST_PATH_POSIX_PROTOCOL_VERSION,
+                  });
+                } else {
+                  diagnosticCode = "CAPABILITY_INVALID";
+                }
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "";
+                diagnosticCode = /^Linux helper bridge 失败：([A-Z0-9_]{1,128})\s*$/u
+                  .exec(message)?.[1] ?? "PROVIDER_EXCEPTION";
+              }
+              // 只公开 Rust bridge 的封闭稳定错误码，禁止输出原始异常或宿主路径。
+              process.stderr.write(`[codegraph-linux-helper] bridge:${diagnosticCode}\n`);
+            }
             throw new Error(`真实 helper positive preflight 失败：${JSON.stringify(outcome)}`);
           }
           NODE
