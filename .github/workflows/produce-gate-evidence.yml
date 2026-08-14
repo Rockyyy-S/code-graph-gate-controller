@@ -989,8 +989,9 @@ jobs:
           [[ "$daemon_sha" == "$expected_daemon_sha" ]]
           [[ "$(stat -c '%U:%G %a' /usr/libexec/codegraph-host-path-bridge)" == "root:root 755" ]]
           [[ "$(stat -c '%U:%G %a' /usr/libexec/codegraph-host-path-daemon)" == "root:root 755" ]]
-          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path)" == "root:gatecandidate 750" ]]
-          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
+          # runner 不属于 gatecandidate 组；受保护目录内的证明必须由 root 读取，不能放宽目录权限。
+          [[ "$(sudo stat -c '%U:%G %a' /etc/codegraph-host-path)" == "root:gatecandidate 750" ]]
+          [[ "$(sudo stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
           [[ "$(stat -c '%U:%G %a' /usr/share/codegraph-host-path/provenance.json)" == "root:root 644" ]]
           [[ "$(stat -c '%U:%G %a' /usr/share/codegraph-host-path/release.pub)" == "root:root 644" ]]
           daemon_pid="$(sudo /bin/sh -c 'umask 0007; nohup /usr/libexec/codegraph-host-path-daemon serve-v1 --socket /run/codegraph-host-path/helper.sock --key /etc/codegraph-host-path/client.key --provenance /usr/share/codegraph-host-path/provenance.json --public-key /usr/share/codegraph-host-path/release.pub >/run/codegraph-host-path/daemon.log 2>&1 & echo $!')"
@@ -999,17 +1000,17 @@ jobs:
           sudo chown 0:0 /run/codegraph-host-path/daemon.pid
           sudo chmod 0644 /run/codegraph-host-path/daemon.pid
           for _ in $(seq 1 100); do
-            if [[ -S /run/codegraph-host-path/helper.sock ]] && sudo kill -0 "$daemon_pid" 2>/dev/null; then
+            if sudo test -S /run/codegraph-host-path/helper.sock && sudo kill -0 "$daemon_pid" 2>/dev/null; then
               break
             fi
             sleep 0.1
           done
-          [[ -S /run/codegraph-host-path/helper.sock ]]
+          sudo test -S /run/codegraph-host-path/helper.sock
           sudo kill -0 "$daemon_pid"
           [[ "$(sudo readlink -f "/proc/$daemon_pid/exe")" == "/usr/libexec/codegraph-host-path-daemon" ]]
           sudo chown 0:20001 /run/codegraph-host-path/helper.sock
           sudo chmod 0660 /run/codegraph-host-path/helper.sock
-          [[ "$(stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
+          [[ "$(sudo stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
           printf 'HOST_PATH_DAEMON_PID=%s\n' "$daemon_pid" >> "$GITHUB_ENV"
           sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
           cleanup_helper_staging
@@ -1099,8 +1100,8 @@ jobs:
           NODE
           sudo mv -- "$release_backup" /usr/share/codegraph-host-path/release.pub
           [[ "$(sha256sum /usr/share/codegraph-host-path/release.pub | cut -d ' ' -f 1)" == "$release_digest" ]]
-          [[ "$(stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
-          [[ "$(stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
+          [[ "$(sudo stat -c '%U:%G %a' /etc/codegraph-host-path/client.key)" == "root:gatecandidate 640" ]]
+          [[ "$(sudo stat -c '%U:%G %a' /run/codegraph-host-path/helper.sock)" == "root:gatecandidate 660" ]]
           sudo kill -0 "$HOST_PATH_DAEMON_PID"
           sudo git -c safe.directory="$candidate_root" -C "$candidate_root" diff --quiet --no-ext-diff HEAD --
           cleanup_preflight
@@ -1154,8 +1155,8 @@ jobs:
           set +e
           cleanup_status=0
           daemon_pid="${HOST_PATH_DAEMON_PID:-}"
-          if [[ ! "$daemon_pid" =~ ^[1-9][0-9]*$ ]] && [[ -f /run/codegraph-host-path/daemon.pid ]]; then
-            daemon_pid="$(sudo tr -d '[:space:]' </run/codegraph-host-path/daemon.pid)"
+          if [[ ! "$daemon_pid" =~ ^[1-9][0-9]*$ ]] && sudo test -f /run/codegraph-host-path/daemon.pid; then
+            daemon_pid="$(sudo tr -d '[:space:]' /run/codegraph-host-path/daemon.pid)"
           fi
           if [[ "$daemon_pid" =~ ^[1-9][0-9]*$ ]]; then
             sudo kill -TERM "$daemon_pid" 2>/dev/null || true

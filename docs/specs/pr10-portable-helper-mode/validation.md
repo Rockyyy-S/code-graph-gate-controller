@@ -11,18 +11,23 @@
 | 禁止外层 umask 冒充目标进程策略 | workflow contract 负断言 | security regression | pass |
 | 不以 chmod 修补候选产物 | workflow contract 负断言 | security regression | pass |
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `4217009...` 已发布） |
+| helper binary 从创建起不可 group/world 写入 | Hosted `numeric-mode` 与 freeze 证明 | integration | pass（bridge/daemon 均为 `755`） |
+| key/socket/PID 受保护路径由 root 证明与清理 | workflow contract | security regression | pass |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（当前首个失败为 runner 无权 stat `client.key`） |
 | 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `cfe7758...`） |
 
 ## Happy-Path Validation
 
 - [x] `umask 0022` 位于 `gatecandidate` 的 Bash 子进程内且早于 `exec cargo build`。
-- [ ] helper proof 在 Hosted runner 报告不可 group/world 写入的 mode。
+- [x] Hosted helper proof 报告 bridge/daemon mode `755`。
+- [x] helper proof 在 Hosted runner 报告不可 group/world 写入的 mode。
 
 ## Boundary and Exception Validation
 
 - [x] workflow 不包含对 `$bridge_source` / `$daemon_source` 的 chmod。
 - [x] mode 若仍含 `0022` 写位，既有 proof 继续失败关闭。
+- [x] runner 不直接遍历 `/etc/codegraph-host-path`、`/run/codegraph-host-path` 的受保护成员。
+- [x] key/socket 目录与材料 mode 未为 runner 放宽。
 
 ## Bugfix-Specific Validation
 
@@ -47,5 +52,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `4217009...` 已发布并由 code-graph head `cfe7758...` 回钉；registry digest `28c9f7f...`、implementation digest `59d84ab...` 已由 exact-head sequence 25 proposal 授权。
-- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 尚待在 proposal 合并后重新运行或完成。
+- Result summary: producer `4217009...` 已证明 umask 修复有效，两个 binary 均为 `755` 且完成 ELF/probe/freeze；后续因 runner 无权遍历 `root:gatecandidate 750` 目录而在 `client.key` mode 证明失败，Win32 同轮成功。
+- Incomplete items and reasons: 需要把受保护路径的只读证明与清理移到 root 身份，发布新 producer 后重跑 Portable 与最终 `architecture-required`。
