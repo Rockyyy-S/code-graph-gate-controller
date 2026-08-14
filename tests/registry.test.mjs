@@ -558,11 +558,11 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
   );
 
   assert.deepEqual(latestPr10Proposal.record, {
-    approvalEvidenceDigest: "2c4722597add7ded6550f741b7a6badf62f1ec35d15f6a91c4dec2a2dd9b34dd",
+    approvalEvidenceDigest: "9aaf32f5c7cc2b224ded25477c5fae05a208f3800fe8877276f8394b94dcfa0a",
     baseGateRegistryDigest: currentRecord.gateRegistryDigest,
     effectiveAt: "2026-08-14T12:14:00+08:00",
     expiresAt: "2026-08-21T12:14:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
+    gateImplementationDigest: "8f961af27a5552f3d6abc92591d5b8c91086aa8198d691854982c959ead0f0f0",
     gateRegistryDigest: "7f9ebe8c85f79d579acfa1c6c0291f4b9398d39655cdf39aa38b7a00d5f31342",
     headOid: latestPr10Head,
     providerRepositoryId: "1303415307",
