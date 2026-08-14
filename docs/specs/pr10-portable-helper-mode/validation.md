@@ -13,8 +13,8 @@
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
 | helper binary 从创建起不可 group/world 写入 | Hosted `numeric-mode` 与 freeze 证明 | integration | pass（bridge/daemon 均为 `755`） |
 | key/socket/PID 受保护路径由 root 证明与清理 | workflow contract | security regression | pass |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（当前首个失败为 runner 无权 stat `client.key`） |
-| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `cfe7758...`） |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `de09eb8...` 已发布） |
+| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `6f8d228...`） |
 
 ## Happy-Path Validation
 
@@ -52,5 +52,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `4217009...` 已证明 umask 修复有效，两个 binary 均为 `755` 且完成 ELF/probe/freeze；后续因 runner 无权遍历 `root:gatecandidate 750` 目录而在 `client.key` mode 证明失败，Win32 同轮成功。
-- Incomplete items and reasons: 需要把受保护路径的只读证明与清理移到 root 身份，发布新 producer 后重跑 Portable 与最终 `architecture-required`。
+- Result summary: producer `de09eb8...` 已把受保护 key/socket/PID 证明和清理移到 root 身份，并由 code-graph head `6f8d228...` 回钉；registry digest `9a1a434...` 与 implementation digest `59d84ab...` 已获 exact-head proposal 授权。
+- Incomplete items and reasons: Hosted Portable/Win32 evidence 与最终 `architecture-required` 尚待 proposal 合并后重新运行或完成。
