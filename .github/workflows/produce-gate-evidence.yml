@@ -1110,6 +1110,8 @@ jobs:
                 const message = error instanceof Error ? error.message : "";
                 const bridgeCode = /^Linux helper bridge 失败：([A-Z0-9_]{1,128})\s*$/u
                   .exec(message)?.[1];
+                const responseReason = /^Linux helper bridge 响应非法。 \[(RESPONSE_(?:SHAPE_INVALID|BINDING_MISMATCH))\]$/u
+                  .exec(message)?.[1];
                 const stableMessageCodes = new Map([
                   ["Linux helper frame 长度非法。", "FRAME_LENGTH_INVALID"],
                   ["Linux helper frame 长度前缀不匹配。", "FRAME_PREFIX_MISMATCH"],
@@ -1122,7 +1124,7 @@ jobs:
                   ["Linux helper bridge stdout 超限。", "BRIDGE_STDOUT_LIMIT"],
                   ["Linux helper bridge stderr 超限。", "BRIDGE_STDERR_LIMIT"],
                 ]);
-                diagnosticCode = bridgeCode ?? stableMessageCodes.get(message) ?? "PROVIDER_EXCEPTION";
+                diagnosticCode = bridgeCode ?? responseReason ?? stableMessageCodes.get(message) ?? "PROVIDER_EXCEPTION";
               }
               // 只公开 Rust bridge 的封闭稳定错误码，禁止输出原始异常或宿主路径。
               process.stderr.write(`[codegraph-linux-helper] bridge:${diagnosticCode}\n`);

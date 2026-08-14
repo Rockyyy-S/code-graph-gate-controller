@@ -405,6 +405,7 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(preflightStep, /Linux helper bridge 失败：\(\[A-Z0-9_\]\{1,128\}\)\\s\*\$/u);
   assert.match(preflightStep, /stableMessageCodes/u);
   assert.match(preflightStep, /BRIDGE_RESPONSE_INVALID/u);
+  assert.match(preflightStep, /RESPONSE_\(\?:SHAPE_INVALID\|BINDING_MISMATCH\)/u);
   assert.match(preflightStep, /\[codegraph-linux-helper\] bridge:/u);
   assert.doesNotMatch(preflightStep, /process\.stderr\.write\(`\$\{error/u);
   assert.match(preflightStep, /LINUX_HELPER_INITIALIZATION_FAILED/u);
