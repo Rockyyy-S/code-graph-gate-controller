@@ -14,8 +14,8 @@
 | helper binary 从创建起不可 group/world 写入 | Hosted `numeric-mode` 与 freeze 证明 | integration | pass（bridge/daemon 均为 `755`） |
 | key/socket/PID 受保护路径由 root 证明与清理 | workflow contract | security regression | pass |
 | preflight 最小环境显式包含可信 Node 目录 | workflow contract | runtime regression | pass |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（当前首个失败为 tsc 无法在最小 PATH 找到 Node） |
-| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `6f8d228...`） |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `ebaeedc...` 已发布） |
+| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `5b04f29...`） |
 
 ## Happy-Path Validation
 
@@ -54,5 +54,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `de09eb8...` 已完整通过 helper provisioning，证明 umask 和受保护路径身份修复有效；preflight 随后因最小 PATH 缺少 setup-node 目录导致 `tsc` 退出 `127`，Win32 同轮成功。
-- Incomplete items and reasons: 需要把已验证的 Node 目录加入三个 preflight 最小环境，发布新 producer 后重跑 Portable 与最终 `architecture-required`。
+- Result summary: producer `ebaeedc...` 已把验证后的 setup-node 目录加入三个 preflight 最小环境，并由 code-graph head `5b04f29...` 回钉；registry digest `9ad6333...` 与 implementation digest `59d84ab...` 已获 exact-head proposal 授权。
+- Incomplete items and reasons: Hosted Portable/Win32 evidence 与最终 `architecture-required` 尚待 proposal 合并后重新运行或完成。

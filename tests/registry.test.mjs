@@ -290,7 +290,7 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
   const canonicalProducerWorkflowSha = "b5bb1069f93fb92640d23df2b803401d4537f59d";
-  const now = Date.parse("2026-08-14T11:35:00+08:00");
+  const now = Date.parse("2026-08-14T11:48:00+08:00");
   const proposals = await loadApprovedProposals(
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
@@ -300,7 +300,7 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
   );
 
   assert.equal(currentRecord.sequence, 24);
-  assert.equal(proposals.length, 6);
+  assert.equal(proposals.length, 7);
   const proposalsByHead = new Map(
     proposals.map((proposal) => [proposal.record.headOid, proposal]),
   );
@@ -310,18 +310,21 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
   const pr10Head = "06866f67dd7e4ac4bd91edc27e176811282f7f18";
   const repinnedPr10Head = "cfe7758aad4dca03ebe31739d8cc906331356827";
   const protectedProofPr10Head = "6f8d2286c9c2f13a3506bd4f4e74436153a13345";
+  const nodePathPr10Head = "5b04f2963e6527bcd9deb9a54135e6d962aa0d5c";
   const oldProposal = proposalsByHead.get(oldHead);
   const newProposal = proposalsByHead.get(newHead);
   const currentProposal = proposalsByHead.get(currentHead);
   const pr10Proposal = proposalsByHead.get(pr10Head);
   const repinnedPr10Proposal = proposalsByHead.get(repinnedPr10Head);
   const protectedProofPr10Proposal = proposalsByHead.get(protectedProofPr10Head);
+  const nodePathPr10Proposal = proposalsByHead.get(nodePathPr10Head);
   assert.ok(oldProposal);
   assert.ok(newProposal);
   assert.ok(currentProposal);
   assert.ok(pr10Proposal);
   assert.ok(repinnedPr10Proposal);
   assert.ok(protectedProofPr10Proposal);
+  assert.ok(nodePathPr10Proposal);
   assert.deepEqual(oldProposal.record, {
     approvalEvidenceDigest: "7c695e1e86306963fa30e022e61953e5fb746e210d47faf3ab0445704848fd08",
     baseGateRegistryDigest: currentRecord.gateRegistryDigest,
@@ -473,6 +476,30 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
     "de09eb873e3d28718e644b48a2ee0bdd550b2995",
   );
 
+  assert.deepEqual(nodePathPr10Proposal.record, {
+    approvalEvidenceDigest: "a05fc0e066b4afb34955967cacab9d9ec1b5238d52ce513c5be6271e2aa6f435",
+    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
+    effectiveAt: "2026-08-14T11:47:00+08:00",
+    expiresAt: "2026-08-21T11:47:00+08:00",
+    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
+    gateRegistryDigest: "9ad6333b4ce12c2bb5cd3516a51c9d16f0de700875f087ec933783fed5e9c0b6",
+    headOid: nodePathPr10Head,
+    providerRepositoryId: "1303415307",
+    pullNumber: 10,
+    schemaVersion: 1,
+    sequence: 25,
+    sourceCommit: nodePathPr10Head,
+  });
+  assert.equal(
+    nodePathPr10Proposal.record.approvalEvidenceDigest,
+    sha256CanonicalJson(nodePathPr10Proposal.approval),
+  );
+  assert.equal(nodePathPr10Proposal.approval.approvedBy, "Rockyyy-S");
+  assert.equal(
+    nodePathPr10Proposal.approval.producerWorkflowSha,
+    "ebaeedc619e6099b3ee39c681c7bf3f58df1a618",
+  );
+
   // 同一 sequence 的历史 proposal 必须共存，并由 repository/PR/exact head 唯一选择。
   for (const proposal of [
     oldProposal,
@@ -481,6 +508,7 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
     pr10Proposal,
     repinnedPr10Proposal,
     protectedProofPr10Proposal,
+    nodePathPr10Proposal,
   ]) {
     const selected = selectCandidateAuthorization({
       canonicalProducerWorkflowSha,
