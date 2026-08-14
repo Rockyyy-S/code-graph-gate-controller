@@ -11,8 +11,8 @@
 | 禁止外层 umask 冒充目标进程策略 | workflow contract 负断言 | security regression | pass |
 | 不以 chmod 修补候选产物 | workflow contract 负断言 | security regression | pass |
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `303f54e...` 的外层 umask 已证实无效） |
-| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `06866f6...`） |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `4217009...` 已发布） |
+| 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `cfe7758...`） |
 
 ## Happy-Path Validation
 
@@ -47,5 +47,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `303f54e...` 的 Hosted portable 复验仍产出 mode `775`，确认外层 umask 无法跨越目标身份进程边界；策略已移入真实 Cargo 子进程，定向合同测试与 controller 全量 183 项测试通过。
-- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 尚待使用新 producer 重新验证。
+- Result summary: producer `4217009...` 已发布并由 code-graph head `cfe7758...` 回钉；registry digest `28c9f7f...`、implementation digest `59d84ab...` 已由 exact-head sequence 25 proposal 授权。
+- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 尚待在 proposal 合并后重新运行或完成。
