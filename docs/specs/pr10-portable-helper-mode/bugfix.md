@@ -17,11 +17,14 @@
 - Actual result: producer 虽在 `sudo` 外层设置 `0022`，但 `sudo -u gatecandidate` 为目标身份建立的实际子进程仍使用 `0002`；Cargo 产出 `775` 的 bridge/daemon，安全证明拒绝继续安装与签名。
 - Follow-up symptom: producer `4217009...` 已把两个 binary 构建为 `755` 并完成 freeze，但 runner 直接 `stat /etc/codegraph-host-path/client.key` 时因父目录 `root:gatecandidate 750` 返回 `Permission denied`。
 - Follow-up root cause: 安装后证明使用了无权遍历受保护目录的 runner 身份；同类未授权访问还存在于 socket ready 检查、preflight mode 证明和清理阶段的 PID 文件读取。
+- Second follow-up symptom: producer `de09eb8...` 已完成 helper provisioning，但 preflight 的 `pnpm exec tsc` 报告 `./node_modules/.bin/tsc: exec: node: not found` 并以 `127` 退出。
+- Second follow-up root cause: `env -i` 把 PATH 收缩为 pnpm 和系统目录，却没有显式保留 setup-node 的可信 Node 目录；候选 `.bin/tsc` 的 `/usr/bin/env node` 无法解析运行时。
 
 ## Expected Correct Behavior
 
 - Expected result: `gatecandidate` 的实际构建子进程在执行 Cargo 前固定 `0022` umask，两个 executable 从生成时即不可被 group/world 写入，并继续通过既有逐项证明。
 - Follow-up expected result: root 对受保护 key/socket/PID 路径执行只读证明与清理，runner 不获得额外组身份，`0750`/`0640`/`0660` 权限保持不变。
+- Second follow-up expected result: preflight 的三个候选进程仅额外获得已解析并验证的 setup-node 目录，不恢复 runner 的完整 PATH，TypeScript 编译和正负 helper probe 均能找到同一 Node runtime。
 - User-visible change: PR portable evidence 可以继续运行；不改变 helper 字节、CLI 或运行时协议。
 
 ## Invariant Behavior That Must Not Change
@@ -47,4 +50,11 @@
 - [x] key/socket 的 mode 证明由 root 身份执行
 - [x] socket readiness 与 cleanup PID 读取不依赖 runner 遍历受保护目录
 - [x] 受保护目录和材料权限不放宽
+- [x] workflow contract 与 controller 全量测试通过
+
+## Second Follow-up Fix Acceptance Criteria
+
+- [x] preflight 显式解析并验证 setup-node executable
+- [x] tsc、positive probe 与 fail-closed probe 的最小 PATH 均包含该 Node 目录
+- [x] 不向候选恢复完整 runner PATH
 - [x] workflow contract 与 controller 全量测试通过

@@ -13,7 +13,8 @@
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
 | helper binary 从创建起不可 group/world 写入 | Hosted `numeric-mode` 与 freeze 证明 | integration | pass（bridge/daemon 均为 `755`） |
 | key/socket/PID 受保护路径由 root 证明与清理 | workflow contract | security regression | pass |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `de09eb8...` 已发布） |
+| preflight 最小环境显式包含可信 Node 目录 | workflow contract | runtime regression | pass |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（当前首个失败为 tsc 无法在最小 PATH 找到 Node） |
 | 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `6f8d228...`） |
 
 ## Happy-Path Validation
@@ -28,6 +29,7 @@
 - [x] mode 若仍含 `0022` 写位，既有 proof 继续失败关闭。
 - [x] runner 不直接遍历 `/etc/codegraph-host-path`、`/run/codegraph-host-path` 的受保护成员。
 - [x] key/socket 目录与材料 mode 未为 runner 放宽。
+- [x] preflight 不恢复完整 runner PATH，仅增加已验证的 setup-node 目录。
 
 ## Bugfix-Specific Validation
 
@@ -52,5 +54,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: producer `de09eb8...` 已把受保护 key/socket/PID 证明和清理移到 root 身份，并由 code-graph head `6f8d228...` 回钉；registry digest `9a1a434...` 与 implementation digest `59d84ab...` 已获 exact-head proposal 授权。
-- Incomplete items and reasons: Hosted Portable/Win32 evidence 与最终 `architecture-required` 尚待 proposal 合并后重新运行或完成。
+- Result summary: producer `de09eb8...` 已完整通过 helper provisioning，证明 umask 和受保护路径身份修复有效；preflight 随后因最小 PATH 缺少 setup-node 目录导致 `tsc` 退出 `127`，Win32 同轮成功。
+- Incomplete items and reasons: 需要把已验证的 Node 目录加入三个 preflight 最小环境，发布新 producer 后重跑 Portable 与最终 `architecture-required`。

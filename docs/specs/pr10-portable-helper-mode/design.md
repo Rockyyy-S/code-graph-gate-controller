@@ -44,19 +44,20 @@
 
 - Failure scenarios: Cargo 失败、产物仍含写位、产物身份或摘要漂移。
 - Privilege strategy: candidate 仅按 `gatecandidate` 组权限使用 key/socket；安装后 mode、socket readiness 与 cleanup PID 读取由 `sudo` root 执行，避免把 runner 加入组或放宽目录 mode。
+- Runtime strategy: preflight 在外层解析 setup-node 的真实 executable 和所在目录，验证其为普通可执行文件后，仅把该目录加入三个 `env -i` PATH；不得传递完整 runner PATH。
 - Degradation strategy: 保持现有 fail-closed；不得跳过 proof 或生成部分 evidence。
 - Rollback strategy: 单提交回退 producer 变更并恢复旧不可变 SHA；不会触碰候选运行时代码。
 
 ## Observability and Test Strategy
 
 - Logs / metrics / traces: 保留 `helper-proof[*] numeric-mode` 诊断。
-- Unit tests: workflow contract 锁定 `sudo -u gatecandidate env -i` 后的子进程、restrictive umask 的存在和顺序，并要求受保护 key/socket/PID 只由明确的 root 边界读取。
+- Unit tests: workflow contract 锁定 `sudo -u gatecandidate env -i` 后的子进程、restrictive umask 的存在和顺序，要求受保护 key/socket/PID 只由明确的 root 边界读取，并验证三个 preflight PATH 均绑定同一可信 Node 目录。
 - Integration tests: controller 全量 `pnpm test`；随后用新 producer 重新运行 `code-graph` PR #10 portable job。
 - Regression checks: Win32 producer、可信 tool proof、Cargo JSON 归因和冻结/签名合同继续通过。
 - Layered review: `logic / edge handling / rule consistency`
 
 ## Risks and Tradeoffs
 
-- Primary risks: umask 再次设置在 `sudo` 外层而未作用于候选进程；或为让 runner 自检而放宽 key/socket 目录权限，破坏最小权限边界。
+- Primary risks: umask 再次设置在 `sudo` 外层而未作用于候选进程；为让 runner 自检而放宽 key/socket 目录权限；或用完整 runner PATH 修复 Node 解析，从而扩大候选可执行面。
 - Alternative approaches: 构建后 `chmod 0755`、放宽 proof、修改 crate；这些方案都会削弱或混淆信任边界。
 - Decision rationale: `0022` 在文件创建时消除危险写位，改动最小且保持产物字节与既有证明逻辑不变。
