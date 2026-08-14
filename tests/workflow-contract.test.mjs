@@ -400,6 +400,11 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
     2,
   );
   assert.match(preflightStep, /outcome\.status !== "complete"/u);
+  assert.match(preflightStep, /outcome\.reason === "PROVIDER_ERROR"/u);
+  assert.match(preflightStep, /binding\.provider\.capture/u);
+  assert.match(preflightStep, /Linux helper bridge 失败：\(\[A-Z0-9_\]\{1,128\}\)\\s\*\$/u);
+  assert.match(preflightStep, /\[codegraph-linux-helper\] bridge:/u);
+  assert.doesNotMatch(preflightStep, /process\.stderr\.write\(`\$\{error/u);
   assert.match(preflightStep, /LINUX_HELPER_INITIALIZATION_FAILED/u);
   assert.match(preflightStep, /fail-closed preflight/u);
   assert.match(preflightStep, /release\.pub\.preflight-backup/u);
