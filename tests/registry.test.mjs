@@ -300,7 +300,7 @@ test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 prop
   );
 
   assert.equal(currentRecord.sequence, 24);
-  assert.equal(proposals.length, 15);
+  assert.equal(proposals.length, 16);
   const proposalsByHead = new Map(
     proposals.map((proposal) => [proposal.record.headOid, proposal]),
   );
