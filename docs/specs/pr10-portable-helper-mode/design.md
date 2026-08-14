@@ -30,7 +30,7 @@
 ### Incremental Change Points
 
 - Reused modules: 既有 helper provisioning、`prove_private_binary` 和 workflow contract 测试提取器。
-- New change points: 一个目标用户构建 shell 边界，以及验证该边界与 umask 顺序的回归测试。
+- New change points: 一个目标用户构建 shell 边界，以及验证该边界、umask 顺序和受保护安装路径证明身份的回归测试。
 - Forbidden touch points: 候选 crate、mode 拒绝谓词、签名材料、Controller policy 和 ruleset。
 
 ## Data Structures and Interfaces
@@ -43,19 +43,20 @@
 ## Error Handling
 
 - Failure scenarios: Cargo 失败、产物仍含写位、产物身份或摘要漂移。
+- Privilege strategy: candidate 仅按 `gatecandidate` 组权限使用 key/socket；安装后 mode、socket readiness 与 cleanup PID 读取由 `sudo` root 执行，避免把 runner 加入组或放宽目录 mode。
 - Degradation strategy: 保持现有 fail-closed；不得跳过 proof 或生成部分 evidence。
 - Rollback strategy: 单提交回退 producer 变更并恢复旧不可变 SHA；不会触碰候选运行时代码。
 
 ## Observability and Test Strategy
 
 - Logs / metrics / traces: 保留 `helper-proof[*] numeric-mode` 诊断。
-- Unit tests: workflow contract 锁定 `sudo -u gatecandidate env -i` 后的子进程、restrictive umask 的存在和顺序，并拒绝外层 umask 冒充。
+- Unit tests: workflow contract 锁定 `sudo -u gatecandidate env -i` 后的子进程、restrictive umask 的存在和顺序，并要求受保护 key/socket/PID 只由明确的 root 边界读取。
 - Integration tests: controller 全量 `pnpm test`；随后用新 producer 重新运行 `code-graph` PR #10 portable job。
 - Regression checks: Win32 producer、可信 tool proof、Cargo JSON 归因和冻结/签名合同继续通过。
 - Layered review: `logic / edge handling / rule consistency`
 
 ## Risks and Tradeoffs
 
-- Primary risks: umask 再次设置在 `sudo` 外层而未作用于候选进程，或误用 chmod 掩盖产物创建策略。
+- Primary risks: umask 再次设置在 `sudo` 外层而未作用于候选进程；或为让 runner 自检而放宽 key/socket 目录权限，破坏最小权限边界。
 - Alternative approaches: 构建后 `chmod 0755`、放宽 proof、修改 crate；这些方案都会削弱或混淆信任边界。
 - Decision rationale: `0022` 在文件创建时消除危险写位，改动最小且保持产物字节与既有证明逻辑不变。

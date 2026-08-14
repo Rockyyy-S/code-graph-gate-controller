@@ -378,9 +378,10 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(provisionStep, /manifestSha256/u);
   assert.match(provisionStep, /signatureKeyId: `ci-job-scoped-/u);
   assert.match(provisionStep, /signerId: `ci-job-scoped-/u);
-  assert.match(provisionStep, /stat -c '%U:%G %a' \/etc\/codegraph-host-path\)" == "root:gatecandidate 750"/u);
-  assert.match(provisionStep, /stat -c '%U:%G %a' \/etc\/codegraph-host-path\/client\.key/u);
-  assert.match(provisionStep, /stat -c '%U:%G %a' \/run\/codegraph-host-path\/helper\.sock/u);
+  assert.match(provisionStep, /sudo stat -c '%U:%G %a' \/etc\/codegraph-host-path\)" == "root:gatecandidate 750"/u);
+  assert.match(provisionStep, /sudo stat -c '%U:%G %a' \/etc\/codegraph-host-path\/client\.key/u);
+  assert.match(provisionStep, /sudo test -S \/run\/codegraph-host-path\/helper\.sock/u);
+  assert.match(provisionStep, /sudo stat -c '%U:%G %a' \/run\/codegraph-host-path\/helper\.sock/u);
   assert.match(provisionStep, /\/run\/codegraph-host-path\/daemon\.pid/u);
   assert.match(provisionStep, /serve-v1/u);
   assert.doesNotMatch(provisionStep, /(?:release-root|release-signer|dummy|weak-provider)/iu);
@@ -393,6 +394,8 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(preflightStep, /release\.pub\.preflight-backup/u);
   assert.match(preflightStep, /invalid_public_key/u);
   assert.match(preflightStep, /sudo mv -- "\$release_backup" \/usr\/share\/codegraph-host-path\/release\.pub/u);
+  assert.match(preflightStep, /sudo stat -c '%U:%G %a' \/etc\/codegraph-host-path\/client\.key/u);
+  assert.match(preflightStep, /sudo stat -c '%U:%G %a' \/run\/codegraph-host-path\/helper\.sock/u);
   assert.doesNotMatch(
     portableJob,
     /CODEGRAPH_[A-Z0-9_]*(?:OVERRIDE|TEST_PROVIDER)|createTest[A-Za-z0-9]*Provider|dummy socket/iu,
@@ -413,6 +416,9 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(cleanupStep, /if mountpoint --quiet \/g/u);
   assert.match(cleanupStep, /if mountpoint --quiet \/g; then[\s\S]*umount -- \/g/u);
   assert.match(cleanupStep, /umount -- \/g \|\| cleanup_status=1/u);
+  assert.match(cleanupStep, /sudo test -f \/run\/codegraph-host-path\/daemon\.pid/u);
+  assert.match(cleanupStep, /sudo tr -d '\[:space:\]' \/run\/codegraph-host-path\/daemon\.pid/u);
+  assert.doesNotMatch(cleanupStep, /<\/run\/codegraph-host-path\/daemon\.pid/u);
   assert.match(cleanupStep, /exit "\$cleanup_status"/u);
   assert.doesNotMatch(cleanupStep, /rm -rf -- \/g[\s\S]*umount -- \/g/u);
 });
