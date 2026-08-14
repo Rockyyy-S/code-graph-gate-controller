@@ -433,8 +433,6 @@ jobs:
           cargo_messages="$material_staging/cargo-messages.jsonl"
           cargo_stderr="$material_staging/cargo.stderr.log"
           resolved_executables="$material_staging/cargo-executables.json"
-          # 让 Cargo 从创建时就移除 group/world 写位，避免在可信证明前事后修改候选产物。
-          umask 0022
           set +e
           sudo -u gatecandidate env -i --chdir="$candidate_root" \
             CARGO_NET_OFFLINE=true \
@@ -443,12 +441,16 @@ jobs:
             LANG=C.UTF-8 \
             PATH=/opt/trusted-rust/bin:/usr/bin:/bin \
             TMPDIR="$helper_build_home" \
-            /opt/trusted-rust/bin/cargo build --locked --offline --release \
-              --manifest-path "$helper_manifest" \
-              --bin codegraph-host-path-bridge \
-              --bin codegraph-host-path-daemon \
-              --message-format=json-render-diagnostics \
-              > "$cargo_messages" 2> "$cargo_stderr"
+            /bin/bash --noprofile --norc -c '
+              # sudo 会为目标身份建立独立 umask，因此必须在真实 Cargo 进程边界内约束创建权限。
+              umask 0022
+              exec /opt/trusted-rust/bin/cargo build --locked --offline --release \
+                --manifest-path "$1" \
+                --bin codegraph-host-path-bridge \
+                --bin codegraph-host-path-daemon \
+                --message-format=json-render-diagnostics
+            ' bash "$helper_manifest" \
+            > "$cargo_messages" 2> "$cargo_stderr"
           cargo_status=$?
           set -e
           if [[ -s "$cargo_stderr" ]]; then

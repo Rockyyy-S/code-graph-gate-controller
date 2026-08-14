@@ -6,7 +6,7 @@
 ## Overview
 
 - Design objective: 让候选 helper 从创建时就满足不可 group/world 写入的 producer 信任约束。
-- Core approach: 在 `Provision signed Linux host-path helper runtime` 的 Cargo 子进程前固定 shell umask 为 `0022`，并用 workflow contract test 锁定顺序与禁止事后 chmod。
+- Core approach: 由 `sudo -u gatecandidate` 启动最小 Bash 子进程，在该真实执行边界内固定 `umask 0022` 后 `exec` Cargo；workflow contract test 同时锁定身份边界、顺序与禁止事后 chmod。
 
 ## Current State and Constraints
 
@@ -24,20 +24,20 @@
 ### Core Flow / Sequence
 
 1. producer 创建仅候选 UID 可访问的 build home。
-2. producer 固定 `umask 0022`，再以 `gatecandidate` 启动离线 Cargo 构建。
+2. producer 以 `gatecandidate` 启动无 profile 的最小 Bash 子进程，由该进程固定 `umask 0022` 并 `exec` 离线 Cargo 构建。
 3. 既有 `prove_private_binary` 证明产物 mode 不含 `0022` 写位，之后才冻结、签名和安装。
 
 ### Incremental Change Points
 
 - Reused modules: 既有 helper provisioning、`prove_private_binary` 和 workflow contract 测试提取器。
-- New change points: 一行 umask 策略与一个回归测试。
+- New change points: 一个目标用户构建 shell 边界，以及验证该边界与 umask 顺序的回归测试。
 - Forbidden touch points: 候选 crate、mode 拒绝谓词、签名材料、Controller policy 和 ruleset。
 
 ## Data Structures and Interfaces
 
 - Inputs: 固定候选 SHA、固定 Rust toolchain、私有 build home。
 - Outputs: mode 通常为 `755` 且不可 group/world 写入的 bridge/daemon。
-- State transitions: build home 创建 → restrictive umask → Cargo build → proof → freeze/sign/install。
+- State transitions: build home 创建 → 切换到候选身份 → 子进程 restrictive umask → `exec` Cargo build → proof → freeze/sign/install。
 - Interface contracts: reusable workflow 输入输出与 artifact schema 不变。
 
 ## Error Handling
@@ -49,13 +49,13 @@
 ## Observability and Test Strategy
 
 - Logs / metrics / traces: 保留 `helper-proof[*] numeric-mode` 诊断。
-- Unit tests: workflow contract 锁定 restrictive umask 的存在和顺序。
+- Unit tests: workflow contract 锁定 `sudo -u gatecandidate env -i` 后的子进程、restrictive umask 的存在和顺序，并拒绝外层 umask 冒充。
 - Integration tests: controller 全量 `pnpm test`；随后用新 producer 重新运行 `code-graph` PR #10 portable job。
 - Regression checks: Win32 producer、可信 tool proof、Cargo JSON 归因和冻结/签名合同继续通过。
 - Layered review: `logic / edge handling / rule consistency`
 
 ## Risks and Tradeoffs
 
-- Primary risks: umask 设置位置错误导致未传递给候选进程，或误用 chmod 掩盖产物创建策略。
+- Primary risks: umask 再次设置在 `sudo` 外层而未作用于候选进程，或误用 chmod 掩盖产物创建策略。
 - Alternative approaches: 构建后 `chmod 0755`、放宽 proof、修改 crate；这些方案都会削弱或混淆信任边界。
 - Decision rationale: `0022` 在文件创建时消除危险写位，改动最小且保持产物字节与既有证明逻辑不变。
