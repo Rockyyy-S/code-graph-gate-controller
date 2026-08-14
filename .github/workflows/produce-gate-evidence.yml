@@ -433,6 +433,8 @@ jobs:
           cargo_messages="$material_staging/cargo-messages.jsonl"
           cargo_stderr="$material_staging/cargo.stderr.log"
           resolved_executables="$material_staging/cargo-executables.json"
+          # 让 Cargo 从创建时就移除 group/world 写位，避免在可信证明前事后修改候选产物。
+          umask 0022
           set +e
           sudo -u gatecandidate env -i --chdir="$candidate_root" \
             CARGO_NET_OFFLINE=true \
