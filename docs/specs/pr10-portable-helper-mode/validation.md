@@ -7,15 +7,16 @@
 
 | Requirement or behavior | Validation method | Test type | Result |
 | --- | --- | --- | --- |
-| Cargo 前固定 `0022` umask | workflow contract 顺序断言 | regression | pass |
+| `gatecandidate` 实际子进程在 Cargo 前固定 `0022` umask | workflow contract 身份边界与顺序断言 | regression | pass |
+| 禁止外层 umask 冒充目标进程策略 | workflow contract 负断言 | security regression | pass |
 | 不以 chmod 修补候选产物 | workflow contract 负断言 | security regression | pass |
 | 既有 producer 合同不回归 | `pnpm test` | unit/contract | pass（183/183） |
-| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `303f54e...` 已发布） |
+| Hosted portable helper mode 安全 | PR #10 `gate-execution-portable` | integration | pending（producer `303f54e...` 的外层 umask 已证实无效） |
 | 精确 PR head 获可信授权 | sequence 25 proposal + registry tests | security contract | pass（head `06866f6...`） |
 
 ## Happy-Path Validation
 
-- [x] `umask 0022` 位于 `cargo build` 之前。
+- [x] `umask 0022` 位于 `gatecandidate` 的 Bash 子进程内且早于 `exec cargo build`。
 - [ ] helper proof 在 Hosted runner 报告不可 group/world 写入的 mode。
 
 ## Boundary and Exception Validation
@@ -46,5 +47,5 @@
 
 - Executor: Codex
 - Execution time: 2026-08-14
-- Result summary: 新测试修复前失败、修复后通过；producer PR #41 已合并；head `06866f6...` proposal 校验及 controller 全量 183 项测试通过。
-- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 仍需在 proposal 合并后重新运行。
+- Result summary: producer `303f54e...` 的 Hosted portable 复验仍产出 mode `775`，确认外层 umask 无法跨越目标身份进程边界；策略已移入真实 Cargo 子进程，定向合同测试与 controller 全量 183 项测试通过。
+- Incomplete items and reasons: Hosted portable/Win32 evidence 与最终 `architecture-required` 尚待使用新 producer 重新验证。

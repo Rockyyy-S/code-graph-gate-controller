@@ -436,14 +436,41 @@ test("Portable helper 私有 build home 由正确身份逐项证明，拒绝 run
   assert.match(provisionStep, /if sudo test -L "\$source"/u);
 });
 
-test("Portable helper 在 Cargo 创建 executable 前固定安全 umask", async () => {
+test("Portable helper 在目标用户 Cargo 进程内固定安全 umask", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const provisionStep = extractPortableHelperProvisionStep(workflow);
-  const umaskOffset = provisionStep.indexOf("umask 0022");
-  const cargoOffset = provisionStep.indexOf("/opt/trusted-rust/bin/cargo build");
+  const sudoOffset = provisionStep.indexOf(
+    'sudo -u gatecandidate env -i --chdir="$candidate_root"',
+  );
+  const candidateShellOffset = provisionStep.indexOf(
+    "/bin/bash --noprofile --norc -c '",
+    sudoOffset,
+  );
+  const umaskOffset = provisionStep.indexOf("umask 0022", candidateShellOffset);
+  const cargoOffset = provisionStep.indexOf(
+    "exec /opt/trusted-rust/bin/cargo build",
+    umaskOffset,
+  );
+  const candidateShellEnd = provisionStep.indexOf(
+    `' bash "$helper_manifest"`,
+    cargoOffset,
+  );
 
-  assert.ok(umaskOffset >= 0, "helper 构建必须显式固定 restrictive umask。");
-  assert.ok(umaskOffset < cargoOffset, "restrictive umask 必须先于 Cargo 创建 executable 生效。");
+  assert.ok(sudoOffset >= 0, "helper 构建必须以 gatecandidate 身份启动。");
+  assert.ok(candidateShellOffset > sudoOffset, "umask 必须由目标用户的实际子进程设置。");
+  assert.ok(umaskOffset > candidateShellOffset, "目标用户子进程必须显式固定 restrictive umask。");
+  assert.ok(cargoOffset > umaskOffset, "restrictive umask 必须先于 Cargo 创建 executable 生效。");
+  assert.ok(candidateShellEnd > cargoOffset, "Cargo 必须保持在目标用户的受控子进程内。");
+  // 外层 umask 无法约束 sudo 为目标身份建立的新进程，合同只接受子进程内策略。
+  assert.doesNotMatch(
+    provisionStep.slice(0, candidateShellOffset),
+    /^\s*umask\s+0022\s*$/mu,
+    "不得用 sudo 外层 umask 冒充目标用户进程的创建权限策略。",
+  );
+  assert.match(
+    provisionStep.slice(candidateShellOffset, candidateShellEnd),
+    /--manifest-path "\$1"/u,
+  );
   assert.doesNotMatch(
     provisionStep,
     /chmod[^\n]*(?:bridge_source|daemon_source|\.cargo-target\/release)/u,
