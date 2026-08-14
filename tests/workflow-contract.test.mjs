@@ -119,7 +119,7 @@ test("Win32 外层固定 deadline preflight 由 Harness 验证后传递给候选
 
   assert.equal(typeof win32Job, "string");
   assert.match(win32Job, /Get-Volume -ErrorAction Stop/u);
-  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 10/u);
+  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 30/u);
   assert.match(win32Job, /--win32-preflight-artifact', \$env:WIN32_PREFLIGHT_ARTIFACT/u);
   assert.match(harness, /validatedWin32Preflight = validateWin32PreflightArtifact/u);
   assert.match(harness, /CODEGRAPH_TRUSTED_WIN32_PREFLIGHT_V1/u);
@@ -403,6 +403,8 @@ test("portable producer 在 Harness 前建立真实签名 helper 与受支持 sn
   assert.match(preflightStep, /outcome\.reason === "PROVIDER_ERROR"/u);
   assert.match(preflightStep, /binding\.provider\.capture/u);
   assert.match(preflightStep, /Linux helper bridge 失败：\(\[A-Z0-9_\]\{1,128\}\)\\s\*\$/u);
+  assert.match(preflightStep, /stableMessageCodes/u);
+  assert.match(preflightStep, /BRIDGE_RESPONSE_INVALID/u);
   assert.match(preflightStep, /\[codegraph-linux-helper\] bridge:/u);
   assert.doesNotMatch(preflightStep, /process\.stderr\.write\(`\$\{error/u);
   assert.match(preflightStep, /LINUX_HELPER_INITIALIZATION_FAILED/u);
@@ -707,7 +709,7 @@ test("Win32 blocking gate 只在 windows-latest/NTFS runner 执行并由干净 j
   assert.match(win32Job, new RegExp(`PNPM_ENTRY_SIZE: '${pnpmWin32EntrySize}'`, "u"));
   assert.match(win32Job, /Get-FileHash -Algorithm SHA256/u);
   assert.match(win32Job, /Get-Volume -ErrorAction Stop/u);
-  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 10/u);
+  assert.match(win32Job, /Wait-Job -Job \$job -Timeout 30/u);
   assert.match(win32Job, /fileSystem = \$null/u);
   assert.match(win32Job, /DriveType -ne 'Fixed'/u);
   assert.match(win32Job, /FileSystem -ne 'NTFS'/u);
