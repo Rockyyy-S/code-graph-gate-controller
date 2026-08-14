@@ -436,6 +436,21 @@ test("Portable helper 私有 build home 由正确身份逐项证明，拒绝 run
   assert.match(provisionStep, /if sudo test -L "\$source"/u);
 });
 
+test("Portable helper 在 Cargo 创建 executable 前固定安全 umask", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  const provisionStep = extractPortableHelperProvisionStep(workflow);
+  const umaskOffset = provisionStep.indexOf("umask 0022");
+  const cargoOffset = provisionStep.indexOf("/opt/trusted-rust/bin/cargo build");
+
+  assert.ok(umaskOffset >= 0, "helper 构建必须显式固定 restrictive umask。");
+  assert.ok(umaskOffset < cargoOffset, "restrictive umask 必须先于 Cargo 创建 executable 生效。");
+  assert.doesNotMatch(
+    provisionStep,
+    /chmod[^\n]*(?:bridge_source|daemon_source|\.cargo-target\/release)/u,
+    "候选产物不得在证明前通过 chmod 事后修补。",
+  );
+});
+
 test("Portable helper 从 Cargo JSON 唯一归因两个 executable 并保留 Cargo exit code", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const provisionStep = extractPortableHelperProvisionStep(workflow);
