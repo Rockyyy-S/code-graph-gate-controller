@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "approvalKind": "proposed-gate-registry",
+  "approvedBy": "Rockyyy-S",
+  "approvedAt": "2026-08-18T07:29:47Z",
+  "effectiveAt": "2026-08-18T07:29:47Z",
+  "expiresAt": "2026-08-25T07:29:47Z",
+  "providerRepositoryId": "1303415307",
+  "pullNumber": 11,
+  "sequence": 25,
+  "sourceCommit": "9255e83d67bf5551de6f43bbc5d239c738c61bda",
+  "headOid": "9255e83d67bf5551de6f43bbc5d239c738c61bda",
+  "baseGateRegistryDigest": "f84f6fd96280eddd7c6b9689c975b5fd19a82260b77206c318b63bb2815e9831",
+  "gateRegistryDigest": "7f9ebe8c85f79d579acfa1c6c0291f4b9398d39655cdf39aa38b7a00d5f31342",
+  "gateImplementationDigest": "2449151b2dec8d0153b3e1ffa49e4a824c9fd42f97f04cff5016cf39c699b679",
+  "producerWorkflowSha": "a6b1accf6fd044f49f1860c5945344e3578d72f7"
+}
