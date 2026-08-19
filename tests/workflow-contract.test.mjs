@@ -817,7 +817,7 @@ test("Controller canonical producer 只来自已验证 approval", async () => {
     controller,
     /canonicalProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u,
   );
-  assert.equal(approval.producerWorkflowSha, "b5bb1069f93fb92640d23df2b803401d4537f59d");
+  assert.equal(approval.producerWorkflowSha, "a6b1accf6fd044f49f1860c5945344e3578d72f7");
   assert.match(controller, /"--signer-workflow"/u);
   assert.match(controller, /"--signer-digest"/u);
   assert.doesNotMatch(controller, /"--signer-repo"/u);
@@ -843,14 +843,11 @@ test("Controller canonical producer 只来自已验证 approval", async () => {
 });
 
 test("Controller 从 candidate authorization 选择 producer 并贯穿 attestation", async () => {
-  const [controller, harness, proposedApproval] = await Promise.all([
+  const [controller, harness, trustedApproval] = await Promise.all([
     readFile(new URL("../bin/run-controller.mjs", import.meta.url), "utf8"),
     readFile(harnessPath, "utf8"),
     readFile(
-      new URL(
-        "../trusted/proposed/833c11094b9189f2aaefbe85bbc811c504dda0e1.approval.json",
-        import.meta.url,
-      ),
+      new URL("../trusted/registry-approval.json", import.meta.url),
       "utf8",
     ).then(JSON.parse),
   ]);
@@ -859,7 +856,7 @@ test("Controller 从 candidate authorization 选择 producer 并贯穿 attestati
     controller,
     /const producerWorkflowSha = "[a-f0-9]{40}";/u,
   );
-  assert.doesNotMatch(controller, new RegExp(proposedApproval.producerWorkflowSha, "u"));
+  assert.doesNotMatch(controller, new RegExp(trustedApproval.producerWorkflowSha, "u"));
   assert.match(controller, /canonicalProducerWorkflowSha: trustedApproval\.producerWorkflowSha/u);
   assert.match(controller, /selectCandidateAuthorization/u);
   assert.match(controller, /candidateAuthorization\.producerWorkflowSha/u);

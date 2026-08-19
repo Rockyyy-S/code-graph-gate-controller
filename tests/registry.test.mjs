@@ -239,7 +239,7 @@ test("sequence=3 可信记录绑定 gate 实现摘要", () => {
   );
 });
 
-test("可信 registry sequence=24 消费精确 bec9ed7 proposal 并绑定新 producer 根", async () => {
+test("可信 registry sequence=25 消费精确 PR 11 proposal 并绑定新 producer 根", async () => {
   const approval = JSON.parse(
     await readFile(new URL("../trusted/registry-approval.json", import.meta.url), "utf8"),
   );
@@ -257,23 +257,23 @@ test("可信 registry sequence=24 消费精确 bec9ed7 proposal 并绑定新 pro
   );
 
   validateTrustedRegistryRecord(record);
-  assert.equal(record.sequence, 24);
-  assert.equal(record.sourceCommit, "bec9ed7c7184845e1f760730f826785f6646fa18");
+  assert.equal(record.sequence, 25);
+  assert.equal(record.sourceCommit, "9255e83d67bf5551de6f43bbc5d239c738c61bda");
   assert.equal(
     record.gateImplementationDigest,
-    "95ab1080a12dcc8965abe3c6b1b9ff672ab979f1e069c3df471041d43f609427",
+    "2449151b2dec8d0153b3e1ffa49e4a824c9fd42f97f04cff5016cf39c699b679",
   );
   assert.equal(
     record.gateRegistryDigest,
-    "f84f6fd96280eddd7c6b9689c975b5fd19a82260b77206c318b63bb2815e9831",
+    "7f9ebe8c85f79d579acfa1c6c0291f4b9398d39655cdf39aa38b7a00d5f31342",
   );
   assert.equal(record.approvalEvidenceDigest, sha256CanonicalJson(approval));
   assert.equal(approval.sequence, record.sequence);
-  assert.equal(previousRecord.sequence, 23);
+  assert.equal(previousRecord.sequence, 24);
   assert.equal(previousRecord.approvalEvidenceDigest, sha256CanonicalJson(previousApproval));
-  assert.equal(previousApproval.producerWorkflowSha, "67b35a8c1516759c680c5835c1956cdd623f7476");
+  assert.equal(previousApproval.producerWorkflowSha, "b5bb1069f93fb92640d23df2b803401d4537f59d");
   assert.equal(approval.previousProducerWorkflowSha, previousApproval.producerWorkflowSha);
-  assert.equal(approval.producerWorkflowSha, "b5bb1069f93fb92640d23df2b803401d4537f59d");
+  assert.equal(approval.producerWorkflowSha, "a6b1accf6fd044f49f1860c5945344e3578d72f7");
   assert.doesNotThrow(() =>
     validateTrustedRegistryApproval({
       approval,
@@ -285,328 +285,20 @@ test("可信 registry sequence=24 消费精确 bec9ed7 proposal 并绑定新 pro
   );
 });
 
-test("sequence 24 信任根按 exact head 加载历史与当前 sequence 25 proposal", async () => {
+test("sequence 25 提升 PR 11 根后不保留已消费或过期的 sequence 25 proposal", async () => {
   const currentRecord = JSON.parse(
     await readFile(new URL("../trusted/registry.json", import.meta.url), "utf8"),
   );
-  const canonicalProducerWorkflowSha = "b5bb1069f93fb92640d23df2b803401d4537f59d";
-  const now = Date.parse("2026-08-14T12:14:00+08:00");
   const proposals = await loadApprovedProposals(
     fileURLToPath(new URL("../trusted/proposed", import.meta.url)),
     {
       currentRecord,
-      now,
+      now: Date.parse("2026-08-19T01:18:13Z"),
     },
   );
 
-  assert.equal(currentRecord.sequence, 24);
-  assert.equal(proposals.length, 22);
-  const proposalsByHead = new Map(
-    proposals.map((proposal) => [proposal.record.headOid, proposal]),
-  );
-  const oldHead = "833c11094b9189f2aaefbe85bbc811c504dda0e1";
-  const newHead = "9b0210f572bd63c6614d13d60b6b28a1bb4aa246";
-  const currentHead = "2a11fcd1cce2a8d9ec41483b43077d55d24f3474";
-  const pr10Head = "06866f67dd7e4ac4bd91edc27e176811282f7f18";
-  const repinnedPr10Head = "cfe7758aad4dca03ebe31739d8cc906331356827";
-  const protectedProofPr10Head = "6f8d2286c9c2f13a3506bd4f4e74436153a13345";
-  const nodePathPr10Head = "5b04f2963e6527bcd9deb9a54135e6d962aa0d5c";
-  const helperLifecyclePr10Head = "34300ed1bdd90676bc3fc2760820c6c544255fd6";
-  const btrfsDevicePr10Head = "fb8ea33196242a7f50fca93e39b467aa15b9f636";
-  const latestPr10Head = "91be62e6260715ff6f9390eb7ab51834ebccc618";
-  const oldProposal = proposalsByHead.get(oldHead);
-  const newProposal = proposalsByHead.get(newHead);
-  const currentProposal = proposalsByHead.get(currentHead);
-  const pr10Proposal = proposalsByHead.get(pr10Head);
-  const repinnedPr10Proposal = proposalsByHead.get(repinnedPr10Head);
-  const protectedProofPr10Proposal = proposalsByHead.get(protectedProofPr10Head);
-  const nodePathPr10Proposal = proposalsByHead.get(nodePathPr10Head);
-  const helperLifecyclePr10Proposal = proposalsByHead.get(helperLifecyclePr10Head);
-  const btrfsDevicePr10Proposal = proposalsByHead.get(btrfsDevicePr10Head);
-  const latestPr10Proposal = proposalsByHead.get(latestPr10Head);
-  assert.ok(oldProposal);
-  assert.ok(newProposal);
-  assert.ok(currentProposal);
-  assert.ok(pr10Proposal);
-  assert.ok(repinnedPr10Proposal);
-  assert.ok(protectedProofPr10Proposal);
-  assert.ok(nodePathPr10Proposal);
-  assert.ok(helperLifecyclePr10Proposal);
-  assert.ok(btrfsDevicePr10Proposal);
-  assert.ok(latestPr10Proposal);
-  assert.deepEqual(oldProposal.record, {
-    approvalEvidenceDigest: "7c695e1e86306963fa30e022e61953e5fb746e210d47faf3ab0445704848fd08",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-09T12:10:33+08:00",
-    expiresAt: "2026-08-16T12:10:33+08:00",
-    gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
-    gateRegistryDigest: "5318861ba63c2e6f83e998ca1a3ff827d800ab512a3af44f7e38443b9a32eb5c",
-    headOid: "833c11094b9189f2aaefbe85bbc811c504dda0e1",
-    providerRepositoryId: "1303415307",
-    pullNumber: 9,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: oldHead,
-  });
-  assert.equal(
-    oldProposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(oldProposal.approval),
-  );
-  assert.equal(oldProposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    oldProposal.approval.producerWorkflowSha,
-    "23b8fc5bc221b99d78640ab55a711ae3d42054f4",
-  );
-  assert.deepEqual(newProposal.record, {
-    approvalEvidenceDigest: "a1cd122d54183d5f55c00b8f58dd006f22b89493b0bba13e050240c61b786531",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-09T15:54:54+08:00",
-    expiresAt: "2026-08-16T15:54:54+08:00",
-    gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
-    gateRegistryDigest: "59fc03bf4b01ab0a55ef3f081805274ebd1da804370e4e7ed1fa4b4f261e8fdf",
-    headOid: newHead,
-    providerRepositoryId: "1303415307",
-    pullNumber: 9,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: newHead,
-  });
-  assert.equal(
-    newProposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(newProposal.approval),
-  );
-  assert.equal(newProposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    newProposal.approval.producerWorkflowSha,
-    "d243785453f64dd0c077516ec78479b307dc361c",
-  );
-  assert.notEqual(
-    newProposal.approval.producerWorkflowSha,
-    canonicalProducerWorkflowSha,
-  );
-
-  assert.deepEqual(currentProposal.record, {
-    approvalEvidenceDigest: "6c93dbd20898215cb2aa23b1040f76c94bfcb2b612eb7e0896e439b60bc39537",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-10T17:06:37+08:00",
-    expiresAt: "2026-08-17T17:06:37+08:00",
-    gateImplementationDigest: "8737436b9b8c9e1e917d04f6bfe41c4a6a186e82533ad9e918b48b88ade6f6bc",
-    gateRegistryDigest: "f0a95f6f3a88908aee584b873676291530f351b0326e4e205e09318f815feeb1",
-    headOid: currentHead,
-    providerRepositoryId: "1303415307",
-    pullNumber: 9,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: currentHead,
-  });
-  assert.equal(
-    currentProposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(currentProposal.approval),
-  );
-  assert.equal(currentProposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    currentProposal.approval.producerWorkflowSha,
-    "2cc5b1206ba64c1e60702159154cf58ef903da70",
-  );
-  assert.notEqual(
-    currentProposal.approval.producerWorkflowSha,
-    canonicalProducerWorkflowSha,
-  );
-
-  assert.deepEqual(pr10Proposal.record, {
-    approvalEvidenceDigest: "4892e9411e4b47007be61528141730ebc756861b7b5da4a65a189b02eade0799",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T10:59:52+08:00",
-    expiresAt: "2026-08-21T10:59:52+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "fd655ed5937df15444743cf5a84326f8b4bef53e01bf5a4e22a95fa5877dfaca",
-    headOid: pr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: pr10Head,
-  });
-  assert.equal(
-    pr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(pr10Proposal.approval),
-  );
-  assert.equal(pr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    pr10Proposal.approval.producerWorkflowSha,
-    "303f54e297eed25f6f35721eceb82935ccea3a0c",
-  );
-
-  assert.deepEqual(repinnedPr10Proposal.record, {
-    approvalEvidenceDigest: "4b41427c3d3d77fc70f32bc776076c29ebb90328011e84722a0cc4ad3a45e329",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T11:20:00+08:00",
-    expiresAt: "2026-08-21T11:20:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "28c9f7f07a5db942bf868105e77fdb1a72a04518d7969cdb68799640e727b6ef",
-    headOid: repinnedPr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: repinnedPr10Head,
-  });
-  assert.equal(
-    repinnedPr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(repinnedPr10Proposal.approval),
-  );
-  assert.equal(repinnedPr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    repinnedPr10Proposal.approval.producerWorkflowSha,
-    "4217009b3e38a21f10780e66e9aeaa091c0d15c0",
-  );
-
-  assert.deepEqual(protectedProofPr10Proposal.record, {
-    approvalEvidenceDigest: "3e1eb80e793af498ca694a0c4426f9d5a10b47c24a6af942f656a22c6c733d56",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T11:34:00+08:00",
-    expiresAt: "2026-08-21T11:34:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "9a1a434f1c2e479268b9cb69e6b47af7010794daa9d5128d4b090690268a1d7c",
-    headOid: protectedProofPr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: protectedProofPr10Head,
-  });
-  assert.equal(
-    protectedProofPr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(protectedProofPr10Proposal.approval),
-  );
-  assert.equal(protectedProofPr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    protectedProofPr10Proposal.approval.producerWorkflowSha,
-    "de09eb873e3d28718e644b48a2ee0bdd550b2995",
-  );
-
-  assert.deepEqual(nodePathPr10Proposal.record, {
-    approvalEvidenceDigest: "a05fc0e066b4afb34955967cacab9d9ec1b5238d52ce513c5be6271e2aa6f435",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T11:47:00+08:00",
-    expiresAt: "2026-08-21T11:47:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "9ad6333b4ce12c2bb5cd3516a51c9d16f0de700875f087ec933783fed5e9c0b6",
-    headOid: nodePathPr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: nodePathPr10Head,
-  });
-  assert.equal(
-    nodePathPr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(nodePathPr10Proposal.approval),
-  );
-  assert.equal(nodePathPr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    nodePathPr10Proposal.approval.producerWorkflowSha,
-    "ebaeedc619e6099b3ee39c681c7bf3f58df1a618",
-  );
-
-  assert.deepEqual(helperLifecyclePr10Proposal.record, {
-    approvalEvidenceDigest: "fa672108c185acbc929a6c97372341ca66422492ecc07eb33e5cbab1fa8f4476",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T12:13:00+08:00",
-    expiresAt: "2026-08-21T12:13:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "9ad6333b4ce12c2bb5cd3516a51c9d16f0de700875f087ec933783fed5e9c0b6",
-    headOid: helperLifecyclePr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: helperLifecyclePr10Head,
-  });
-  assert.equal(
-    helperLifecyclePr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(helperLifecyclePr10Proposal.approval),
-  );
-  assert.equal(helperLifecyclePr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    helperLifecyclePr10Proposal.approval.producerWorkflowSha,
-    "ebaeedc619e6099b3ee39c681c7bf3f58df1a618",
-  );
-
-  assert.deepEqual(btrfsDevicePr10Proposal.record, {
-    approvalEvidenceDigest: "61123d63da5055107f962f8877f3df0a2568afd349b1998b5efc96f556b006fe",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T12:14:00+08:00",
-    expiresAt: "2026-08-21T12:14:00+08:00",
-    gateImplementationDigest: "59d84ab8a86b7cdc0b8261be8ce80b9c51832753ca95eb71e8255478f1d436fb",
-    gateRegistryDigest: "9ad6333b4ce12c2bb5cd3516a51c9d16f0de700875f087ec933783fed5e9c0b6",
-    headOid: btrfsDevicePr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: btrfsDevicePr10Head,
-  });
-  assert.equal(
-    btrfsDevicePr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(btrfsDevicePr10Proposal.approval),
-  );
-  assert.equal(btrfsDevicePr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    btrfsDevicePr10Proposal.approval.producerWorkflowSha,
-    "ebaeedc619e6099b3ee39c681c7bf3f58df1a618",
-  );
-
-  assert.deepEqual(latestPr10Proposal.record, {
-    approvalEvidenceDigest: "9aaf32f5c7cc2b224ded25477c5fae05a208f3800fe8877276f8394b94dcfa0a",
-    baseGateRegistryDigest: currentRecord.gateRegistryDigest,
-    effectiveAt: "2026-08-14T12:14:00+08:00",
-    expiresAt: "2026-08-21T12:14:00+08:00",
-    gateImplementationDigest: "8f961af27a5552f3d6abc92591d5b8c91086aa8198d691854982c959ead0f0f0",
-    gateRegistryDigest: "7f9ebe8c85f79d579acfa1c6c0291f4b9398d39655cdf39aa38b7a00d5f31342",
-    headOid: latestPr10Head,
-    providerRepositoryId: "1303415307",
-    pullNumber: 10,
-    schemaVersion: 1,
-    sequence: 25,
-    sourceCommit: latestPr10Head,
-  });
-  assert.equal(
-    latestPr10Proposal.record.approvalEvidenceDigest,
-    sha256CanonicalJson(latestPr10Proposal.approval),
-  );
-  assert.equal(latestPr10Proposal.approval.approvedBy, "Rockyyy-S");
-  assert.equal(
-    latestPr10Proposal.approval.producerWorkflowSha,
-    "a6b1accf6fd044f49f1860c5945344e3578d72f7",
-  );
-
-  // 同一 sequence 的历史 proposal 必须共存，并由 repository/PR/exact head 唯一选择。
-  for (const proposal of [
-    oldProposal,
-    newProposal,
-    currentProposal,
-    pr10Proposal,
-    repinnedPr10Proposal,
-    protectedProofPr10Proposal,
-    nodePathPr10Proposal,
-    helperLifecyclePr10Proposal,
-    btrfsDevicePr10Proposal,
-    latestPr10Proposal,
-  ]) {
-    const selected = selectCandidateAuthorization({
-      canonicalProducerWorkflowSha,
-      currentRecord,
-      headOid: proposal.record.headOid,
-      now,
-      proposals,
-      providerRepositoryId: proposal.record.providerRepositoryId,
-      pullNumber: proposal.record.pullNumber,
-      registryDigest: proposal.record.gateRegistryDigest,
-    });
-    assert.equal(selected.producerWorkflowSha, proposal.approval.producerWorkflowSha);
-    assert.equal(selected.record.sourceCommit, proposal.record.headOid);
-  }
+  assert.equal(currentRecord.sequence, 25);
+  assert.deepEqual(proposals, []);
 });
 
 test("Harness 当前 exact head 不受其他合法 proposal 的 producer 污染", async () => {
